@@ -304,8 +304,12 @@ function openWebView() {
     }
     let content = {};
     const { lineCount } = document;
+    const lastLine = addHeadLineDic.get(document.fileName);
     let line = 0;
     for (let idx = 0; idx < lineCount; ++idx) {
+        if (idx === lastLine) {
+            continue;
+        }
         const data = document.lineAt(idx).text;
         if (data.length === 0) {
             continue;
@@ -481,7 +485,7 @@ function checkVisibleChange() {
             editBuilder.delete(new vscode_1.Range(startPos, endPos));
             addHeadLineDic.set(filePath, -1);
         }
-        if (start.line <= currentColumnNameRowIdx) {
+        if (start.line <= currentColumnNameRowIdx || start.line + 1 >= document.lineCount) {
             return;
         }
         console.log(`current visible range: ${start.line} - ${visibleRanges[0].end.line}`);

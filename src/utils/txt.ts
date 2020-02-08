@@ -308,8 +308,10 @@ function openWebView() : void {
 	}
 	let content : any = {};
 	const { lineCount } = document;
+	const lastLine = addHeadLineDic.get(document.fileName);
 	let line = 0;
 	for(let idx = 0; idx < lineCount; ++ idx) {
+		if(idx === lastLine) { continue; }
 		const data = document.lineAt(idx).text;
 		if(data.length === 0) { continue; }
 		if(data.indexOf('-+-') !== -1) {
@@ -450,7 +452,7 @@ function checkVisibleChange() : void {
 			editBuilder.delete(new Range(startPos, endPos));
 			addHeadLineDic.set(filePath, -1);
 		}
-		if(start.line <= currentColumnNameRowIdx) { return; }
+		if(start.line <= currentColumnNameRowIdx || start.line + 1 >= document.lineCount) { return; }
 		console.log(`current visible range: ${start.line} - ${visibleRanges[0].end.line}`);
 		// 此时需要删除的那行还没实际删除, 所以插入的位置不考虑前面是否已经删除了某一行
 		const insertPos = new Position(start.line + 1, 0);
