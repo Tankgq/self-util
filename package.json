@@ -2,7 +2,7 @@
 	"name": "self-util",
 	"displayName": "self-util",
 	"description": "util",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"publisher": "TankGq",
 	"engines": {
 		"vscode": "^1.41.0"
