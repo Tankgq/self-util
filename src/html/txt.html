@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width">
+  <title>x-spreadsheet</title>
+    
+<link href="../css/xspreadsheet.css" rel="stylesheet"></head>
+<body onload="load()" style="padding: 0%;">
+  <div id="x-spreadsheet"></div>
+  <script>
+    function load(){
+      var xs = x.spreadsheet('#x-spreadsheet', {showToolbar: true, showGrid: true, showContextmenu: true})
+        .loadData({
+          freeze: 'B2',
+          styles: [
+            {
+              bgcolor: '#f4f5f8',
+              textwrap: false,
+              align: 'center',
+              halign: 'center',
+              color: '#900b09',
+              border: {
+                top: ['thin', '#0366d6'],
+                bottom: ['thin', '#0366d6'],
+                right: ['thin', '#0366d6'],
+                left: ['thin', '#0366d6'],
+              },
+            },
+            {
+              bgcolor: '#ffffff',
+              textwrap: false,
+              align: 'center',
+              halign: 'center',
+              border: {
+                top: ['thin', '#0366d6'],
+                bottom: ['thin', '#0366d6'],
+                right: ['thin', '#0366d6'],
+                left: ['thin', '#0366d6'],
+              },
+            },
+          ],
+          rows: rowData,
+        }).change((cdata) => {
+          console.log(cdata);
+          console.log(xs.validate());
+        });
+    }
+  </script>
+<script type="text/javascript" src="../js/xspreadsheet.js"></script></body>
+</html>
+
