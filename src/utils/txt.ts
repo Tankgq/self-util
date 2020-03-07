@@ -1,11 +1,15 @@
 import * as vscode from 'vscode';
-import { showInfo, showError } from './log';
 import * as constant from '../constant';
-import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, Uri, WebviewPanel, TextEditor, TextDocumentWillSaveEvent } from 'vscode';
+import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit } from 'vscode';
 import * as path from 'path';
-import * as tools from './tools';
+import * as webviewUtil from './webviewUtil';
+import * as editUtil from './editUtil'
+import { TextState } from '../constant';
+import * as logUtil from './logUtil'
+import { LogUtil } from './logUtil';
+import { start } from 'repl';
 
-const GetWordRegExp = new RegExp('[^\t \n]+');
+const GetWordRegExp = new RegExp(/[^\t \n]+/);
 const GetDigitRegExp = new RegExp(/(?<=[^:])"(\d+)"/g);
 
 let currentTxtFilePath = '';
@@ -17,8 +21,9 @@ let webViewPanel : WebviewPanel;
 let selfContext : ExtensionContext;
 let headerStatuBar : StatusBarItem;
 let frontStatuBar : StatusBarItem;
-let lastSelectStartPos : Position;
-let addHeadLineDic : Map<string, number> = new Map;
+let lastSelectLine : number = -1;
+let currentState : TextState = TextState.NoText;
+let currentTextEditor : TextEditor | undefined = undefined;
 
 export function init(context : ExtensionContext) : void {
 	selfContext = context;
@@ -36,14 +41,37 @@ export function init(context : ExtensionContext) : void {
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TXT_OPEN_WEBVIEW, openWebView);
 	selfContext.subscriptions.push(disposable);
 
-	initCommandStatusBarItem();
+	checkCurrentState();
+	updateCommandStatusBar();
 	initWebViewStatusBarItem();
-
+	
 	vscode.window.onDidChangeActiveTextEditor(onTextEditorChange);
 	const { activeTextEditor } = vscode.window;
+	currentTextEditor = activeTextEditor;
 	if(activeTextEditor) {
+		editUtil.getInstance.init(activeTextEditor);
+		deleteAddLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
 		updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
-		addHeadLineDic.set(activeTextEditor.document.fileName, -1);
+		// editUtil.getInstance.addEdit(editBuilder => {
+		// 						LogUtil.debug(`add 1, time: ${timeUtil.getTimeDetail()}`);
+		// 						editBuilder.insert(new Position(0, 0), '1\n')
+		// 					}).startEdit()
+		// 					.then(_ => {
+		// 						LogUtil.debug(`add 1 complete, time: ${timeUtil.getTimeDetail()}`);
+		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
+		// 						LogUtil.debug(editUtil.getInstance.isEditing());
+		// 					}).addEdit(editBuilder => {
+		// 						LogUtil.debug(`add 2, time: ${timeUtil.getTimeDetail()}`);
+		// 						editBuilder.insert(new Position(0, 0), '2\n')
+		// 					})//.startEdit()
+		// 					.then(_ => {
+		// 						LogUtil.debug(`add 2 complete, time: ${timeUtil.getTimeDetail()}`);
+		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
+		// 						LogUtil.debug(editUtil.getInstance.isEditing());
+		// 					});
+		// editUtil.getInstance.addEdit(editBuilder => editBuilder.delete(new Range(new Position(0, 0), new Position(3, 0))))
+		// 					.addEdit(editBuilder => editBuilder.insert(new Position(3, 0), '1\n'))
+		// 					.startEdit();
 	}
 
 	vscode.window.onDidChangeTextEditorSelection(onTextEditorSelectChange);
@@ -80,7 +108,7 @@ function formatTxt(): void {
 		rowDataList.push(rowData);
 	}
 	if(lineCount === tabCount) {
-		showInfo(`执行 ${constant.COMMAND_TEXT_FORMAT} 失败`);
+		logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_FORMAT} 失败`);
 		return;
 	}
 	currentTxtFilePath = '';
@@ -108,7 +136,7 @@ function formatTxt(): void {
 		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
 	}
-	updateSelectInfo(document, lastSelectStartPos, true, 1);
+	updateSelectInfo(document, activeTextEditor.selection.start, true, 1);
 }
 
 function undoFormatTxt(): void {
@@ -121,7 +149,6 @@ function undoFormatTxt(): void {
 	let content = '';
 	let canExecute = false;
 	const filePath = document.fileName;
-	const lastLine = addHeadLineDic.get(filePath);
 	
 	for(let idx = 0; idx < lineCount; ++ idx) {
 		const data = document.lineAt(idx).text;
@@ -130,7 +157,7 @@ function undoFormatTxt(): void {
 			canExecute = true;
 			continue;
 		}
-		if(idx === lastLine) { continue; }
+		if(isAddedTitle(data) || isAddedSeparator(data)) { return; }
 		const rowData : string[] = data.split(' | ');
 		const length = rowData.length;
 		rowData[0] = rowData[0].substr(1);
@@ -141,21 +168,20 @@ function undoFormatTxt(): void {
 		content += rowData.join('\t') + '\n';
 	}
 	if(! canExecute) {
-		showInfo(`执行 ${constant.COMMAND_TEXT_UNDO_FORMAT} 失败`);
+		logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_UNDO_FORMAT} 失败`);
 		return;
 	}
 	currentTxtFilePath = '';
-	activeTextEditor.edit(editBuilder => {
-		const startPos = new Position(0, 0);
-		const endPos = new Position(lineCount + 1, 0);
-		editBuilder.replace(new Range(startPos, endPos), content);
-		addHeadLineDic.set(filePath, -1);
-	});
-	if(commandStatusBar) {
-		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
-		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
-	}
-	updateSelectInfo(document, lastSelectStartPos, true, -1);
+	editUtil.getInstance
+			.addEdit(editBuilder => {
+				const startPos = new Position(0, 0);
+				const endPos = new Position(lineCount + 1, 0);
+				editBuilder.replace(new Range(startPos, endPos), content);
+			}).startEdit()
+			.then(_ => {
+					updateCommandStatusBar()
+			});
+	updateSelectInfo(document, activeTextEditor.selection.start, true, -1);
 }
 
 function updateCurrentFileHeaderInfo(document : TextDocument, separator : string, rowNameOffset = 0) : void {
@@ -207,6 +233,24 @@ class ColumnInfo {
 	}
 }
 
+enum LineType {
+	LineTypeAll, LineTypeTitle, LineTypeSeparator
+}
+
+class LineInfo {
+	readonly lineType : LineType;
+	readonly content : string;
+	startPosition : number;
+	endPosition : number;
+
+	constructor(lineType : LineType, content : string, startPosition : number, endPosition : number = -1) {
+		this.lineType = lineType;
+		this.content = content;
+		this.startPosition = startPosition;
+		this.endPosition = endPosition === -1 ? startPosition + 1 : endPosition;
+	}
+}
+
 function getCurrentColumnInfo(document: TextDocument, position: Position, rowNameOffset = 0) : ColumnInfo | undefined {
 	const { activeTextEditor } = vscode.window;
 	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
@@ -254,29 +298,19 @@ function provideTxtHover(document: TextDocument, position: Position, token: Canc
 	return new Hover(tipInfo);
 }
 
-function initCommandStatusBarItem() : void {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+function updateCommandStatusBar() : void {
+	if(currentState === TextState.NoText) {
+		if(commandStatusBar) { commandStatusBar.hide(); }
 		return;
 	}
-	const { document } = activeTextEditor;
-	const { lineCount } = document;
-	let command = constant.COMMAND_TEXT_FORMAT;
-	
-	for(let idx = 0; idx < lineCount; ++ idx) {
-		const data = document.lineAt(idx).text;
-		if(data.length === 0) { continue; }
-		if(data.indexOf('-+-') !== -1) {
-			command = constant.COMMAND_TEXT_UNDO_FORMAT;
-			break;
-		}
+	if(! commandStatusBar) {
+		commandStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
 	}
-	commandStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
 
-	if(command === constant.COMMAND_TEXT_FORMAT) {
+	if(currentState === TextState.TextNormal) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
-	} else {
+	} else if(currentState == TextState.TextFormat) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
 	}
@@ -303,20 +337,19 @@ function openWebView() : void {
 	);
 	let separator = getSeparator(document);
 	if(separator.length === 0) {
-		showError('格式错误, 无法打开');
+		logUtil.showError('格式错误, 无法打开');
 		return;
 	}
 	let content : any = {};
 	const { lineCount } = document;
-	const lastLine = addHeadLineDic.get(document.fileName);
 	let line = 0;
 	for(let idx = 0; idx < lineCount; ++ idx) {
-		if(idx === lastLine) { continue; }
 		const data = document.lineAt(idx).text;
 		if(data.length === 0) { continue; }
 		if(data.indexOf('-+-') !== -1) {
 			continue;
 		}
+		if(isAddedTitle(data) || isAddedSeparator(data)) { continue; }
 		const rowData : string[] = data.split(separator);
 		const length = rowData.length;
 		if(rowData[0].charAt(0) === '|' && length > 0) {
@@ -334,13 +367,12 @@ function openWebView() : void {
 				row[idx2] = { text: rowData[idx2].trim(), style: 1 };
 			}
 		}
-		content[line] = { 'cells': row};
+		content[line] = { 'cells': row };
 		++ line;
 	}
-	let htmlContent = tools.getWebViewContent(selfContext, 'src/html/txt.html');
+	let htmlContent = webviewUtil.getWebViewContent(selfContext, 'src/html/txt.html');
 	let contentStr = JSON.stringify(content);
 	contentStr = contentStr.replace(GetDigitRegExp, '$1');
-	console.log(contentStr);
 	htmlContent = htmlContent.replace('rowData', contentStr);
 	webViewPanel.webview.html = htmlContent;
 }
@@ -359,35 +391,36 @@ function initWebViewStatusBarItem() : void {
 }
 
 function onTextEditorChange(editor: TextEditor | undefined) {
+	if(currentTextEditor) {
+		LogUtil.debug(`[onTextEditorChange] previous file: ${currentTextEditor.document.fileName}`);
+		deleteAddLineByType(currentTextEditor.document.fileName, LineType.LineTypeAll);
+		editUtil.getInstance.init(undefined);
+	}
 	currentTxtFilePath = '';
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
-		if(commandStatusBar) { commandStatusBar.hide(); }
+	currentTextEditor = undefined;
+	checkCurrentState();
+	updateCommandStatusBar();
+	if(! editor || editor.document.languageId !== constant.LANGUAGE_TEXT) {
 		if(webViewStatusBar) { webViewStatusBar.hide(); }
 		if(headerStatuBar) { headerStatuBar.hide(); }
 		if(frontStatuBar) { frontStatuBar.hide(); }
 		return;
 	}
-	const filePath = activeTextEditor.document.fileName;
-	if(! addHeadLineDic.has(filePath)) { addHeadLineDic.set(filePath, -1); }
-	if(commandStatusBar) { commandStatusBar.show(); }
+	editUtil.getInstance.init(editor);
+	currentTextEditor = editor;
+	const filePath = editor.document.fileName;
+	const addLineInfoList = addLineInfoDic.get(filePath);
+	if(addLineInfoList) { addLineInfoList.length = 0; }
 	if(webViewStatusBar) { webViewStatusBar.show(); }
-	if(headerStatuBar) { headerStatuBar.show(); }
-	if(frontStatuBar) { frontStatuBar.show(); }
-	updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
+	updateSelectInfo(editor.document, editor.selection.start);
 }
 
 function updateSelectInfo(document : TextDocument, position : Position, forceUpdate = false, rowNameOffset = 0) : void {
 	if(! position) { return; }
-	if(! forceUpdate && lastSelectStartPos && lastSelectStartPos.character === position.character) { return; }
-	if(! headerStatuBar) {
-		headerStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
-		headerStatuBar.show();
-	}
-	if(! frontStatuBar) {
-		frontStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
-		frontStatuBar.show();
-	}
+	if(! headerStatuBar) { headerStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200); }
+	if(! frontStatuBar) { frontStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200); }
+	headerStatuBar.show();
+	frontStatuBar.show();
 	var columnInfo = getCurrentColumnInfo(document, position, rowNameOffset);
 	if(columnInfo === undefined) {
 		headerStatuBar.text = '';
@@ -404,10 +437,153 @@ function updateSelectInfo(document : TextDocument, position : Position, forceUpd
 	const currentRowData = line.split(separator);
 	const columnCount = currentColumnNameList.length;
 	const header = (columnCount > idx ? currentColumnNameList[idx] : '');
-	frontStatuBar.text = `Front: ${currentRowData[0].trim()}, ${currentRowData[1].trimRight()}`;
+	frontStatuBar.text = `Front: ${currentRowData[0].trim()}, ${currentRowData[1].trim()}`;
 	if(position.line === currentColumnNameRowIdx) { headerStatuBar.text = ''; } 
 	else { headerStatuBar.text = `Col #${idx + 1}, ${header}`; }
-	lastSelectStartPos = position;
+}
+
+function updateSeparator(document : TextDocument, position : Position) : void {
+	if(currentState !== TextState.TextFormat) { return; }
+	if(position.line === lastSelectLine) { return; }
+	if(editUtil.getInstance.isEditing()) { return; }
+	const line = document.lineAt(position.line).text;
+	if(line.indexOf('-+-') !== -1 || line.indexOf('=+=') !== -1) { return; }
+	LogUtil.debug(`[updateSelectInfo] position: ${position.line}`);
+	const lineInfoList = getAddLineByType(document.fileName, LineType.LineTypeAll);
+	let previousIsAdd = false;
+	let nextIsAdd = false;
+	if(lineInfoList.length > 0) {
+		const count = lineInfoList.length;
+		for(let idx = 0; idx < count; ++ idx) {
+			if(lineInfoList[idx].lineType == LineType.LineTypeSeparator) {
+				if(lineInfoList[idx].startPosition + 1 === position.line) { previousIsAdd = true; }
+				if(lineInfoList[idx].endPosition === position.line + 2) { nextIsAdd = true; }
+				continue;
+			}
+			if(lineInfoList[idx].startPosition + 1 === position.line) { previousIsAdd = true; }
+			if(lineInfoList[idx].startPosition === position.line + 1) { nextIsAdd = true; }
+		}
+	}
+	const deleteEdit = deleteAddLineByType(document.fileName, LineType.LineTypeSeparator);
+	editUtil.getInstance.addEdit(deleteEdit);
+	if(position.line <= currentColumnNameRowIdx + 1 || position.line + 1 >= document.lineCount) {
+		if(deleteEdit) { editUtil.getInstance.startEdit(); }
+		lastSelectLine = -1;
+		return;
+	}
+	const previous = document.lineAt(position.line - 1).text;
+	const next = document.lineAt(position.line + 1).text;
+	if((! previousIsAdd && previous.indexOf('-+-') !== -1) || (! nextIsAdd && next.indexOf('-+-') !== -1)) {
+		if(deleteEdit) { editUtil.getInstance.startEdit(); }
+		lastSelectLine = -1;
+		return;
+	}
+	const offset = (lastSelectLine !== -1 && lastSelectLine < position.line) ? -2 : 0;
+	const content = document.lineAt(currentColumnNameRowIdx + 1).text.replace(/-/g, '=') + '\n';
+	const upLineInfo = new LineInfo(LineType.LineTypeSeparator, content, position.line);
+	const downLineInfo = new LineInfo(LineType.LineTypeSeparator, content, position.line + 1);
+	editUtil.getInstance.addEdit(addLine(document.fileName, upLineInfo, offset))
+					 .addEdit(addLine(document.fileName, downLineInfo, offset + 1))
+					 .startEdit();
+	lastSelectLine = position.line + 1 + offset;
+	LogUtil.debug(`[updateSelectInfo] lastSelectLine: ${lastSelectLine}`);
+}
+
+function getAddLineByType(fileName : string, lineType : LineType) : LineInfo[] {
+	if(! addLineInfoDic.has(fileName)) { addLineInfoDic.set(fileName, new Array<LineInfo>()); }
+	const lineInfoList = addLineInfoDic.get(fileName);
+	if(lineInfoList === undefined) { return []; }
+	return lineInfoList.filter(value => value.lineType === lineType);
+}
+
+function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBuilder: TextEditorEdit) => void) | undefined | Array<(editBuilder: TextEditorEdit) => void> {
+	const { activeTextEditor } = vscode.window;
+	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+		return undefined;
+	}
+	if(! addLineInfoDic.has(fileName)) { addLineInfoDic.set(fileName, new Array<LineInfo>()); }
+	const lineInfoList = addLineInfoDic.get(fileName);
+	if(lineInfoList === undefined || lineInfoList.length === 0) { return undefined; }
+	let count = lineInfoList.length;
+	const callbackList : Array<(editBuilder: TextEditorEdit) => void> = new Array();
+	if(lineType === LineType.LineTypeAll) {
+		for(let idx = 0; idx < count; ++ idx) {
+			const deleteLineInfo = lineInfoList[idx];
+			const startPos = new Position(deleteLineInfo.startPosition, 0);
+			const endPos = new Position(deleteLineInfo.endPosition, 0);
+			callbackList.push(editBuilder => editBuilder.delete(new Range(startPos, endPos)));
+			LogUtil.debug(`delete start: ${deleteLineInfo.startPosition}, end: ${deleteLineInfo.endPosition}`);
+		}
+		lineInfoList.length = 0;
+		return callbackList;
+	}
+	const deleteIdxList = lineInfoList.map((value, index) => value.lineType === lineType ? index : -1)
+									  .filter(value => value >= 0);
+	if(deleteIdxList.length === 0) { return undefined; }
+	const deleteCount = deleteIdxList.length;
+	
+	const deleteRangeList = new Array<Range>();
+	for(let idx = 0; idx < deleteCount; ++ idx) {
+		const deleteIdx = deleteIdxList[idx]
+		const deleteLineInfo = lineInfoList[deleteIdx];
+		const startPos = new Position(deleteLineInfo.startPosition, 0);
+		const endPos = new Position(deleteLineInfo.endPosition, 0);
+		deleteRangeList.push(new Range(startPos, endPos));
+	}
+	if(deleteCount === count) {
+		for(let idx = 0; idx < deleteCount; ++ idx) {
+			callbackList.push(editBuilder => editBuilder.delete(deleteRangeList[idx]));
+			LogUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
+		}
+		lineInfoList.length = 0;
+		return callbackList;
+	}
+	for(let idx = deleteCount - 1; idx >= 0; -- idx) {
+		const deleteIdx = deleteIdxList[idx]
+		const deleteLineInfo = lineInfoList[deleteIdx];
+		lineInfoList.splice(deleteIdx, 1);
+		count -= 1;
+		const deleteLineCount = deleteLineInfo.endPosition - deleteLineInfo.startPosition;
+		for(let idx2 = 0; idx2 < count; ++ idx2) {
+			if(lineInfoList[idx2].startPosition < deleteLineInfo.startPosition) { continue; }
+			lineInfoList[idx2].startPosition -= deleteLineCount;
+			lineInfoList[idx2].endPosition -= deleteLineCount;
+		}
+		// 要删除的那些行还没实际删除, 所以要删的那些行的行号不能修改
+		callbackList.push(editBuilder => editBuilder.delete(deleteRangeList[idx]));
+		LogUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
+	}
+	return callbackList;
+}
+
+function addLine(fileName : string, lineInfo : LineInfo, offset : number = 0) : ((editBuilder: TextEditorEdit) => void) | undefined {
+	const { activeTextEditor } = vscode.window;
+	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+		return undefined;
+	}
+	let lineInfoList = addLineInfoDic.get(fileName);
+	if(lineInfoList === undefined) {
+		lineInfoList = new Array<LineInfo>();
+		addLineInfoDic.set(fileName, lineInfoList);
+	}
+	const count = lineInfoList.length;
+	const addLineCount = lineInfo.endPosition - lineInfo.startPosition;
+	for(let idx = 0; idx < count; ++ idx) {
+		if(lineInfoList[idx].startPosition < lineInfo.startPosition) { continue; }
+		lineInfoList[idx].startPosition += addLineCount;
+		lineInfoList[idx].endPosition += addLineCount;
+		LogUtil.debug(`start: ${lineInfoList[idx].startPosition - addLineCount} -> ${lineInfoList[idx].startPosition}`);
+	}
+	lineInfoList.push(lineInfo);
+	const insertPos = new Position(lineInfo.startPosition, 0);
+	// 因为添加之前可能会删除掉一些行, document 中行号还没发生改变, 但是实际存储的行号得修正一下
+	lineInfo.startPosition += offset;
+	lineInfo.endPosition += offset;
+	LogUtil.debug(`adjust start: ${lineInfo.startPosition}, end: ${lineInfo.endPosition}`);
+	return editBuilder => {
+		editBuilder.insert(insertPos, lineInfo.content);
+		LogUtil.debug(`insert start: ${insertPos.line}, count: ${addLineCount}`);
+	};
 }
 
 function onTextEditorSelectChange(event : vscode.TextEditorSelectionChangeEvent) {
@@ -420,48 +596,76 @@ function onTextEditorSelectChange(event : vscode.TextEditorSelectionChangeEvent)
 	const position = selections[0].start;
 	if(! position) {  return; }
 	updateSelectInfo(activeTextEditor.document, position);
+	updateSeparator(activeTextEditor.document, position);
 }
 
 function update() : void {
-	checkVisibleChange();
+	checkCurrentState();
+	updateCommandStatusBar();
+	checkVisibleRangeChange();
 }
 
-function checkVisibleChange() : void {
+function checkCurrentState() : void {
 	const { activeTextEditor } = vscode.window;
 	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+		currentState = TextState.NoText;
 		return;
 	}
 	const { document } = activeTextEditor;
+	const { lineCount } = document;
+	
+	for(let idx = 0; idx < lineCount; ++ idx) {
+		const data = document.lineAt(idx).text;
+		if(data.length === 0) { continue; }
+		if(data.indexOf('-+-') !== -1) {
+			currentState = TextState.TextFormat;
+			return;
+		}
+	}
+
+	currentState = TextState.TextNormal;
+}
+
+function checkVisibleRangeChange() : void {
+	if(! currentTextEditor) { return; }
+	if(currentState !== TextState.TextFormat) { return; }
+	if(editUtil.getInstance.isEditing()) { return; }
+	const { document } = currentTextEditor;
 	const filePath = document.fileName;
-	const lastLine = addHeadLineDic.get(filePath);
-	if(lastLine === undefined) { return; }
-	const { visibleRanges } = activeTextEditor;
-	if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0]) { return; }
-	const start = visibleRanges[0].start;
-	if(! start) {  return; }
-	if(lastLine === start.line + 1) { return; }
+	const titleLineInfoList = getAddLineByType(filePath, LineType.LineTypeTitle);
+	const { visibleRanges } = currentTextEditor;
+	if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0] || ! visibleRanges[0].start) { return; }
+	let startLine = visibleRanges[0].start.line + 1;
+	const separatorList = getAddLineByType(filePath, LineType.LineTypeSeparator);
+	if(separatorList.length === 2) {
+		const upStart = Math.min(separatorList[0].startPosition, separatorList[1].startPosition);
+		const upEnd = Math.min(separatorList[0].endPosition, separatorList[1].endPosition);
+		const downStart = Math.max(separatorList[0].startPosition, separatorList[1].startPosition);
+		const downEnd = Math.max(separatorList[0].endPosition, separatorList[1].endPosition);
+		if(startLine > upStart && startLine < downEnd) {
+			startLine = downEnd;
+		}
+	}
+	let offset = 0;
+	if(titleLineInfoList.length !== 0 && titleLineInfoList[0].startPosition === startLine) { return; }
+	if(titleLineInfoList.length !== 0) {
+		if(startLine > titleLineInfoList[0].startPosition) {
+			offset = - Math.min(startLine - titleLineInfoList[0].startPosition, 3);
+			startLine -= offset;
+		}
+	}
 	const separator = getSeparator(document);
 	if(separator.length === 0 || separator === '\t') { return; }
 	updateCurrentFileHeaderInfo(document, separator);
-	const header = document.lineAt(currentColumnNameRowIdx);
-
-	activeTextEditor.edit(editBuilder => {
-		if(lastLine !== -1) {
-			const startPos = new Position(lastLine, 0);
-			const endPos = new Position(lastLine + 1, 0);
-			editBuilder.delete(new Range(startPos, endPos));
-			addHeadLineDic.set(filePath, -1);
-		}
-		if(start.line <= currentColumnNameRowIdx || start.line + 1 >= document.lineCount) { return; }
-		console.log(`current visible range: ${start.line} - ${visibleRanges[0].end.line}`);
-		// 此时需要删除的那行还没实际删除, 所以插入的位置不考虑前面是否已经删除了某一行
-		const insertPos = new Position(start.line + 1, 0);
-		editBuilder.insert(insertPos, header.text + '\n');
-		addHeadLineDic.set(filePath, insertPos.line);
-		if(lastLine !== -1 && lastLine <= insertPos.line) {
-			addHeadLineDic.set(filePath, insertPos.line - 1);
-		}
-	});
+	const deleteEdit = deleteAddLineByType(filePath, LineType.LineTypeTitle);
+	editUtil.getInstance.addEdit(deleteEdit);
+	if(startLine < currentColumnNameRowIdx + 2 || startLine + 3 > document.lineCount) {
+		if(deleteEdit) { editUtil.getInstance.startEdit(); }
+		return;
+	}
+	const header = document.getText(new Range(new Position(currentColumnNameRowIdx - 1, 0), new Position(currentColumnNameRowIdx + 2, 0)));
+	editUtil.getInstance.addEdit(addLine(filePath, new LineInfo(LineType.LineTypeTitle, header, startLine, startLine + 3), offset))
+					 .startEdit();
 }
 
 function onWillSave(event : TextDocumentWillSaveEvent) : void {
@@ -524,4 +728,33 @@ function getNewColumnData(rowData : string[],
 		line += intervalChar + alignString(rowData[idx], rowMaxWidthList[idx], fillChar);
 	}
 	return line += endchar + '\n';
+}
+
+// +  ID  + 技能类型  +     技能名称     + 冷却时间 +
+function isTitle(line : string) : boolean {
+	return line.startsWith('+ ');
+}
+
+// |  2   |    31     |     召唤技能     |    15    |
+function isContent(line : string) : boolean {
+	return line.startsWith('| ');
+}
+
+// +------+-----------+------------------+----------+
+function isSeparator(line : string) : boolean {
+	return line.startsWith('+-');
+}
+
+// --------------------------------------------------
+// -  ID  - 技能类型  -     技能名称     - 冷却时间 -
+// --------------------------------------------------
+function isAddedTitle(line : string) : boolean {
+	return line.startsWith('--') || line.startsWith('- ');
+}
+
+// ==================================================
+// |  23  |    62     |    狙击炮技能    |    20    |
+// ==================================================
+function isAddedSeparator(line : string) : boolean {
+	return line.startsWith('==');
 }

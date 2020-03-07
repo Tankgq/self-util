@@ -12,3 +12,5 @@ export const STATUS_BAR_ITEM_TXT_WEBVIEW : string = 'Webview';
 
 export const STATUS_BAR_ITEM_TXT_COMMAND_COLOR : string = 'white';
 export const STATUS_BAR_ITEM_TXT_WEBVIEW_COLOR : string = 'white';
+
+export enum TextState { NoText, TextNormal, TextFormat }
