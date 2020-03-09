@@ -1,11 +1,15 @@
 import * as vscode from 'vscode';
 import * as constant from '../constant';
-import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit } from 'vscode';
+import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent } from 'vscode';
 import * as path from 'path';
 import * as webviewUtil from './webviewUtil';
 import * as editUtil from './editUtil';
 import { TextState } from '../constant';
 import * as logUtil from './logUtil';
+import * as messageBroker from './messageBroker';
+import { interval, fromEvent, Subject, UnaryFunction, Observable, ConnectableObservable } from 'rxjs';
+import { throttleTime } from 'rxjs/operators';
+import { MessageCode } from './messageBroker';
 
 const GetWordRegExp = new RegExp(/[^\t \n]+/);
 const GetDigitRegExp = new RegExp(/(?<=[^:])"(\d+)"/g);
@@ -119,6 +123,9 @@ let currentState : TextState = TextState.NoText;
 let currentTextEditor : TextEditor | undefined = undefined;
 let addedLineDic : Map<string, Array<LineInfo>> = new Map();
 
+let scrollSubject : Subject<TextEditorVisibleRangesChangeEvent> = new Subject();
+let documentSubject : Subject<TextDocumentChangeEvent> = new Subject();
+
 export function init(context : ExtensionContext) : void {
 	selfContext = context;
 	let disposable;
@@ -135,7 +142,35 @@ export function init(context : ExtensionContext) : void {
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TXT_OPEN_WEBVIEW, openWebView);
 	selfContext.subscriptions.push(disposable);
 
+	vscode.window.onDidChangeTextEditorSelection(onTextEditorSelectChange);
+
+	vscode.workspace.onWillSaveTextDocument(onWillSave);
+
+	vscode.workspace.onDidChangeTextDocument(event => documentSubject.next(event));
+	documentSubject.subscribe(event => {
+		const { contentChanges } = event;
+		if(! contentChanges || contentChanges.length === 0 || ! contentChanges[0]) { return; }
+		const contentChange = contentChanges[0];
+		const { start, end } = contentChange.range;
+		logUtil.info(`range: (${start.line}, ${start.character}), end: (${end.line}, ${end.character}), text: ${contentChange.text}`);
+	});
+
+	vscode.window.onDidChangeTextEditorVisibleRanges(event => {
+		scrollSubject.next(event);
+	});
+	scrollSubject.pipe(throttleTime(500)).subscribe(event => {
+		const { visibleRanges } = event;
+		if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0]) { return; }
+		const { start, end } = visibleRanges[0];
+		logUtil.debug(`start: (${start.line}, ${start.character}), end: (${end.line}, ${end.character})`);
+		messageBroker.sendUpdateTextStateMessage(TextState.NoText);
+	});
+
+	interval(500).subscribe(_ => update());
+
+	updateCurrentActiveTextEditor();
 	checkCurrentState();
+
 	updateCommandStatusBar();
 	initWebViewStatusBarItem();
 	
@@ -147,62 +182,35 @@ export function init(context : ExtensionContext) : void {
 
 		deleteAddLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
 		updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
-
-		editUtil.getInstance.addEdit(editBuilder => {
-								editBuilder.insert(new Position(0, 0), '1\n');
-								logUtil.trace('1');
-							})
-							.startEdit()
-							.then(_ => logUtil.debug('2'))
-							.addEdit(editBuilder => {
-								editBuilder.insert(new Position(0, 0), '2\n');
-								logUtil.info('3');
-							})
-							.startEdit()
-							.then(_ => logUtil.warn('4'))
-							.addEdit(editBuilder => {
-								editBuilder.insert(new Position(0, 0), '3\n');
-								logUtil.error('5');
-							})
-							.startEdit()
-							.then(_ => logUtil.fatal('6'));
 		// editUtil.getInstance.addEdit(editBuilder => {
-		// 						LogUtil.debug(`add 1`);
 		// 						editBuilder.insert(new Position(0, 0), '1\n');
-		// 					}).startEdit()
-		// 					.then(_ => {
-		// 						LogUtil.debug(`add 1 complete`);
-		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
-		// 						LogUtil.debug(editUtil.getInstance.isEditing());
-		// 						LogUtil.debug(`isDirty: ${activeTextEditor.document.isDirty}`);
-		// 					}).addEdit(editBuilder => {
-		// 						LogUtil.debug(`add 2`);
+		// 						logUtil.trace('1');
+		// 					})
+		// 					.startEdit()
+		// 					.then(_ => logUtil.debug('2'))
+		// 					.addEdit(editBuilder => {
 		// 						editBuilder.insert(new Position(0, 0), '2\n');
-		// 					}).startEdit()
-		// 					.then(_ => {
-		// 						LogUtil.debug(`add 2 complete`);
-		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
-		// 						LogUtil.debug(editUtil.getInstance.isEditing());
-		// 						LogUtil.debug(`isDirty: ${activeTextEditor.document.isDirty}`);
-		// 					});
-		// editUtil.getInstance.addEdit(editBuilder => editBuilder.delete(new Range(new Position(0, 0), new Position(3, 0))))
-		// 					.addEdit(editBuilder => editBuilder.insert(new Position(3, 0), '1\n'))
-		// 					.startEdit();
+		// 						logUtil.info('3');
+		// 					})
+		// 					.startEdit()
+		// 					.then(_ => logUtil.warn('4'))
+		// 					.addEdit(editBuilder => {
+		// 						editBuilder.insert(new Position(0, 0), '3\n');
+		// 						logUtil.error('5');
+		// 					})
+		// 					.startEdit()
+		// 					.then(_ => logUtil.fatal('6'));
 	}
+}
 
-	vscode.window.onDidChangeTextEditorSelection(onTextEditorSelectChange);
-
-	vscode.workspace.onWillSaveTextDocument(onWillSave);
-
-	setInterval(() => update(), 500);
+function updateCurrentActiveTextEditor() : void {
+	const { activeTextEditor } = vscode.window;
+	if(currentTextEditor !== activeTextEditor) { currentTextEditor = activeTextEditor; }
 }
 
 function formatTxt(): void {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
-		return;
-	}
-	const { document } = activeTextEditor;
+	if(! currentTextEditor) { return; }
+	const { document } = currentTextEditor;
 	const { lineCount } = document;
 	let columnCount = 0;
 	const rowDataList : Array<string[]> = [];
@@ -258,16 +266,17 @@ function formatTxt(): void {
 								SeparatorChar[SeparatorType.BottomLeft] + SeparatorChar[SeparatorType.Horizontal],
 								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomCenter] + SeparatorChar[SeparatorType.Horizontal],
 								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomRight]);
-	activeTextEditor.edit(editBuilder => {
+	currentTextEditor.edit(editBuilder => {
 		const startPos = new Position(0, 0);
 		const endPos = new Position(lineCount + 1, 0);
 		editBuilder.replace(new Range(startPos, endPos), content);
 	});
+	
 	if(commandStatusBar) {
 		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
 	}
-	updateSelectInfo(document, activeTextEditor.selection.start, true, 1);
+	updateSelectInfo(document, currentTextEditor.selection.start, true, 1);
 }
 
 function undoFormatTxt(): void {
@@ -725,13 +734,8 @@ function onTextEditorSelectChange(event : vscode.TextEditorSelectionChangeEvent)
 	updateSeparator(activeTextEditor.document, position);
 }
 
-let lastVersion = 0;
 function update() : void {
 	if(! currentTextEditor) { return; }
-	if(currentTextEditor.document.version !== lastVersion) {
-		// LogUtil.info(`version: ${lastVersion}, last version: ${currentTextEditor.document.version}`);
-		lastVersion = currentTextEditor.document.version;
-	}
 	checkCurrentState();
 	updateCommandStatusBar();
 	checkVisibleRangeChange();

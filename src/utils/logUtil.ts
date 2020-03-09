@@ -10,6 +10,8 @@ export const enum LogLevel {
 	Fatal
 }
 
+export let maxStackDepth : number = 3;
+export let maxStackDepthWhenLarge : number = 5;
 export let logLevel : LogLevel = LogLevel.Trace;
 
 export function trace(message?: any, ...optionalParams: any[]) : void {
@@ -43,6 +45,7 @@ export function fatal(message?: any, ...optionalParams: any[]) : void {
 }
 
 const getCallStackRegex = /(?<=logUtil\.\w+:\d+:\d+\)\n)(?![\w\W]*?logUtil)[\w\W]*/;
+const getEveryCallStack = /\tat[^\n]+\n/gm;
 export function getCallStack() : string {
 	let result = '';
 	try { throw new Error(); }
@@ -50,6 +53,20 @@ export function getCallStack() : string {
 		result = e.stack;
 		let m = getCallStackRegex.exec(result);
 		if(m && m.length) { result = m[0]; }
+		const matchList = new Array<string>();
+		while ((m = getEveryCallStack.exec(result)) !== null) {
+			if (m.index === getEveryCallStack.lastIndex) {
+				++ getEveryCallStack.lastIndex;
+			}
+			if(m.length) { matchList.push(m[0]); }
+		}
+		if(matchList.length) {
+			let count = Math.min(matchList.length, maxStackDepth);
+			// if(count > maxStackDepthWhenLarge * 2) { count = maxStackDepthWhenLarge; }
+			// else { count = Math.min(count, maxStackDepth); }
+			result = '';
+			for(let idx = 0; idx < count; ++ idx) { result += matchList[idx]; }
+		}
 	}
 	return result;
 }
