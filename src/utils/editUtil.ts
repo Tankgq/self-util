@@ -1,5 +1,5 @@
 import { TextEditor, TextEditorEdit } from 'vscode';
-import { LogUtil } from './logUtil';
+import * as logUtil from './logUtil';
 
 class EditTool {
 
@@ -32,7 +32,7 @@ class EditTool {
 
 	addEdit(editFunction : ((editBuilder: TextEditorEdit) => void) | undefined | Array<(editBuilder: TextEditorEdit) => void>) : EditTool {
 		if(! this.textEditor ) {
-			LogUtil.error('当前没有初始化 textEditor');
+			logUtil.error('当前没有初始化 textEditor');
 			return this;
 		}
 		if(! editFunction) { return this; }
@@ -51,14 +51,14 @@ class EditTool {
 
 	startEdit() : this {
 		if(! this.textEditor) {
-			LogUtil.error('当前没有初始化 textEditor');
+			logUtil.error('当前没有初始化 textEditor');
 			return this;
 		}
 
 		if(! this.editThenable) {
 			const functionList = this.editFunctionList.shift();
 			if(! functionList || ! functionList.length) {
-				LogUtil.error('当前没有任何操作');
+				logUtil.error('当前没有任何操作');
 				return this;
 			}
 			this.edit(functionList);
@@ -75,20 +75,20 @@ class EditTool {
 			return;
 		}
 		this.editThenable = this.textEditor.edit(editBuilder => {
-			LogUtil.debug(`start edit version: ${this.editVersion}`);
+			logUtil.debug(`start edit version: ${this.editVersion}`);
 			const count = functionList.length;
 			for(let idx = 0; idx < count; ++ idx) {
 				functionList[idx](editBuilder);
 			}
 			functionList.length = 0;
 		}).then(_ => {
-			LogUtil.debug(`edit version: ${this.editVersion} complete`);
+			logUtil.debug(`edit version: ${this.editVersion} complete`);
 			
 			const then = this.editCompleteFunctionList.shift();
 			if(then && then.length) {
 				const length = then.length;
 				for(let idx = 0; idx < length; ++ idx) { then[idx](undefined); }
-				LogUtil.debug(`edit version: ${this.editVersion}, editCompleteFunction executed complete`);
+				logUtil.debug(`edit version: ${this.editVersion}, editCompleteFunction executed complete`);
 			}
 			this.editVersion += 1;
 			
@@ -103,11 +103,11 @@ class EditTool {
 	
 	then(onComplete : (_ : any) => void) : EditTool {
 		if(! this.textEditor ) {
-			LogUtil.error('当前没有初始化 textEditor');
+			logUtil.error('当前没有初始化 textEditor');
 			return this;
 		}
 		if(! this.editCompleteFunctionList.length) {
-			LogUtil.error('当前没有任何编辑操作');
+			logUtil.error('当前没有任何编辑操作');
 			return this;
 		}
 		const lastThen = this.editCompleteFunctionList[this.editCompleteFunctionList.length - 1];

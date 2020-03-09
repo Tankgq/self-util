@@ -6,7 +6,6 @@ import * as webviewUtil from './webviewUtil';
 import * as editUtil from './editUtil';
 import { TextState } from '../constant';
 import * as logUtil from './logUtil';
-import { LogUtil } from './logUtil';
 
 const GetWordRegExp = new RegExp(/[^\t \n]+/);
 const GetDigitRegExp = new RegExp(/(?<=[^:])"(\d+)"/g);
@@ -151,22 +150,22 @@ export function init(context : ExtensionContext) : void {
 
 		editUtil.getInstance.addEdit(editBuilder => {
 								editBuilder.insert(new Position(0, 0), '1\n');
-								LogUtil.debug('1');
+								logUtil.trace('1');
 							})
 							.startEdit()
-							.then(_ => LogUtil.debug('2'))
+							.then(_ => logUtil.debug('2'))
 							.addEdit(editBuilder => {
 								editBuilder.insert(new Position(0, 0), '2\n');
-								LogUtil.debug('3');
+								logUtil.info('3');
 							})
 							.startEdit()
-							.then(_ => LogUtil.debug('4'))
+							.then(_ => logUtil.warn('4'))
 							.addEdit(editBuilder => {
 								editBuilder.insert(new Position(0, 0), '3\n');
-								LogUtil.debug('5');
+								logUtil.error('5');
 							})
 							.startEdit()
-							.then(_ => LogUtil.debug('6'));
+							.then(_ => logUtil.fatal('6'));
 		// editUtil.getInstance.addEdit(editBuilder => {
 		// 						LogUtil.debug(`add 1`);
 		// 						editBuilder.insert(new Position(0, 0), '1\n');
@@ -521,7 +520,7 @@ function initWebViewStatusBarItem() : void {
 
 function onTextEditorChange(editor: TextEditor | undefined) {
 	if(currentTextEditor) {
-		LogUtil.debug(`[onTextEditorChange] previous file: ${currentTextEditor.document.fileName}`);
+		logUtil.debug(`[onTextEditorChange] previous file: ${currentTextEditor.document.fileName}`);
 		deleteAddLineByType(currentTextEditor.document.fileName, LineType.LineTypeAll);
 		editUtil.getInstance.init(undefined);
 	}
@@ -575,7 +574,7 @@ function updateSeparator(document : TextDocument, position : Position) : void {
 	if(editUtil.getInstance.isEditing()) { return; }
 	const line = document.lineAt(position.line).text;
 	if(line.indexOf('-+-') !== -1 || line.indexOf('=+=') !== -1) { return; }
-	LogUtil.debug(`[updateSelectInfo] position: ${position.line}`);
+	logUtil.debug(`[updateSelectInfo] position: ${position.line}`);
 	const lineInfoList = getAddLineByType(document.fileName, LineType.LineTypeAll);
 	let previousIsAdd = false;
 	let nextIsAdd = false;
@@ -613,7 +612,7 @@ function updateSeparator(document : TextDocument, position : Position) : void {
 					 .addEdit(addLine(document.fileName, downLineInfo, offset + 1))
 					 .startEdit();
 	lastSelectLine = position.line + 1 + offset;
-	LogUtil.debug(`[updateSelectInfo] lastSelectLine: ${lastSelectLine}`);
+	logUtil.debug(`[updateSelectInfo] lastSelectLine: ${lastSelectLine}`);
 }
 
 function getAddLineByType(fileName : string, lineType : LineType) : LineInfo[] {
@@ -639,7 +638,7 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 			const startPos = new Position(deleteLineInfo.startPosition, 0);
 			const endPos = new Position(deleteLineInfo.endPosition, 0);
 			callbackList.push(editBuilder => editBuilder.delete(new Range(startPos, endPos)));
-			LogUtil.debug(`delete start: ${deleteLineInfo.startPosition}, end: ${deleteLineInfo.endPosition}`);
+			logUtil.debug(`delete start: ${deleteLineInfo.startPosition}, end: ${deleteLineInfo.endPosition}`);
 		}
 		lineInfoList.length = 0;
 		return callbackList;
@@ -660,7 +659,7 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 	if(deleteCount === count) {
 		for(let idx = 0; idx < deleteCount; ++ idx) {
 			callbackList.push(editBuilder => editBuilder.delete(deleteRangeList[idx]));
-			LogUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
+			logUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
 		}
 		lineInfoList.length = 0;
 		return callbackList;
@@ -678,7 +677,7 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 		}
 		// 要删除的那些行还没实际删除, 所以要删的那些行的行号不能修改
 		callbackList.push(editBuilder => editBuilder.delete(deleteRangeList[idx]));
-		LogUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
+		logUtil.debug(`delete start: ${deleteRangeList[idx].start.line}, end: ${deleteRangeList[idx].end.line}`);
 	}
 	return callbackList;
 }
@@ -699,17 +698,17 @@ function addLine(fileName : string, lineInfo : LineInfo, offset : number = 0) : 
 		if(lineInfoList[idx].startPosition < lineInfo.startPosition) { continue; }
 		lineInfoList[idx].startPosition += addLineCount;
 		lineInfoList[idx].endPosition += addLineCount;
-		LogUtil.debug(`start: ${lineInfoList[idx].startPosition - addLineCount} -> ${lineInfoList[idx].startPosition}`);
+		logUtil.debug(`start: ${lineInfoList[idx].startPosition - addLineCount} -> ${lineInfoList[idx].startPosition}`);
 	}
 	lineInfoList.push(lineInfo);
 	const insertPos = new Position(lineInfo.startPosition, 0);
 	// 因为添加之前可能会删除掉一些行, document 中行号还没发生改变, 但是实际存储的行号得修正一下
 	lineInfo.startPosition += offset;
 	lineInfo.endPosition += offset;
-	LogUtil.debug(`adjust start: ${lineInfo.startPosition}, end: ${lineInfo.endPosition}`);
+	logUtil.debug(`adjust start: ${lineInfo.startPosition}, end: ${lineInfo.endPosition}`);
 	return editBuilder => {
 		editBuilder.insert(insertPos, lineInfo.content);
-		LogUtil.debug(`insert start: ${insertPos.line}, count: ${addLineCount}`);
+		logUtil.debug(`insert start: ${insertPos.line}, count: ${addLineCount}`);
 	};
 }
 
