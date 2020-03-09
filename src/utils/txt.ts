@@ -3,14 +3,108 @@ import * as constant from '../constant';
 import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit } from 'vscode';
 import * as path from 'path';
 import * as webviewUtil from './webviewUtil';
-import * as editUtil from './editUtil'
+import * as editUtil from './editUtil';
 import { TextState } from '../constant';
-import * as logUtil from './logUtil'
+import * as logUtil from './logUtil';
 import { LogUtil } from './logUtil';
-import { start } from 'repl';
 
 const GetWordRegExp = new RegExp(/[^\t \n]+/);
 const GetDigitRegExp = new RegExp(/(?<=[^:])"(\d+)"/g);
+enum SeparatorType {
+	FillChar,
+	Horizontal,
+	Vertical,
+	TitleVertical,
+	TopLeft,
+	TopCenter,
+	TopRight,
+	MiddleLeft,
+	MiddleCenter,
+	MiddleRight,
+	BottomLeft,
+	BottomCenter,
+	BottomRight
+}
+// SeparatorType.FillChar: ' '
+// SeparatorType.Horizontal: '═'
+// SeparatorType.Vertical: '║'
+// SeparatorType.Vertical: '┃'
+// SeparatorType.TopLeft: '╔'
+// SeparatorType.TopCenter: '╦'
+// SeparatorType.TopRight: '╗'
+// SeparatorType.MiddleLeft: '╠'
+// SeparatorType.MiddleCenter: '╬'
+// SeparatorType.MiddleRight: '╣'
+// SeparatorType.BottomLeft: '╚'
+// SeparatorType.BottomCenter: '╩'
+// SeparatorType.BottomRight: '╝'
+const SeparatorChar = [' ', '═', '║', '┃', '╔', '╦', '╗', '╠', '╬', '╣', '╚', '╩', '╝'];
+// ╔══════╦═══════════╦══════════════════╦══════════╗
+const TopStartStr = SeparatorChar[SeparatorType.TopLeft] + SeparatorChar[SeparatorType.Horizontal];
+// ┃  ID  ┃ 技能类型  ┃     技能名称     ┃ 冷却时间 ┃
+const TitleStartStr = SeparatorChar[SeparatorType.TitleVertical] + SeparatorChar[SeparatorType.FillChar];
+// ╠══════╬═══════════╬══════════════════╬══════════╣
+const MiddleStartStr = SeparatorChar[SeparatorType.MiddleLeft] + SeparatorChar[SeparatorType.Horizontal];
+// ║  2   ║    31     ║     召唤技能     ║    15    ║
+const ContentStartStr = SeparatorChar[SeparatorType.Vertical] + SeparatorChar[SeparatorType.FillChar];
+// ╚══════╩═══════════╩══════════════════╩══════════╝
+const BottomStartStr = SeparatorChar[SeparatorType.BottomLeft] + SeparatorChar[SeparatorType.Horizontal];
+
+enum AddedTitleSeparatorType {
+	FillChar,
+	Horizontal,
+	Vertical,
+	TopLeft,
+	TopCenter,
+	TopRight,
+	BottomLeft,
+	BottomCenter,
+	BottomRight
+}
+// AddedTitleSeparatorType.FillChar: ' '
+// AddedTitleSeparatorType.Horizontal: '═'
+// AddedTitleSeparatorType.Vertical: '┆'
+// AddedTitleSeparatorType.TopLeft: '╒'
+// AddedTitleSeparatorType.TopCenter: '╤'
+// AddedTitleSeparatorType.TopRight: '╕'
+// AddedTitleSeparatorType.BottomLeft: '╘'
+// AddedTitleSeparatorType.BottomCenter: '╧'
+// AddedTitleSeparatorType.BottomRight: '╛'
+const AddedTitleSeparatorChar = [' ', '═', '┆', '╒', '╤', '╗', '╘', '╧', '╛'];
+// ╒══════╤═══════════╤══════════════════╤══════════╕
+const AddedTitleTopStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
+// ┆  ID  ┆ 技能类型  ┆     技能名称     ┆ 冷却时间 ┆
+const AddedTitleStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.FillChar];
+// ╘══════╧═══════════╧══════════════════╧══════════╛
+const AddedTitleBottomStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.BottomLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
+
+enum AddedContentSeparatorType {
+	FillChar,
+	Horizontal,
+	Vertical,
+	TopLeft,
+	TopCenter,
+	TopRight,
+	BottomLeft,
+	BottomCenter,
+	BottomRight
+}
+// AddedContentSeparatorType.FillChar: ' '
+// AddedContentSeparatorType.Horizontal: '━'
+// AddedContentSeparatorType.Vertical: '┇'
+// AddedContentSeparatorType.TopLeft: '┏'
+// AddedContentSeparatorType.TopCenter: '┳'
+// AddedContentSeparatorType.TopRight: '┓'
+// AddedContentSeparatorType.BottomLeft: '┖'
+// AddedContentSeparatorType.BottomCenter: '┻'
+// AddedContentSeparatorType.BottomRight: '┛'
+const AddedContentSeparatorChar = [' ', '━', '┇', '┏', '┳', '┓', '┖', '┻', '┛'];
+// ┏━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+const AddedContentTopStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.TopLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
+// ┇  23  ┇    62     ┇    狙击炮技能    ┇    20    ┇
+const AddedContentStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.Vertical] + AddedContentSeparatorChar[AddedContentSeparatorType.FillChar];
+// ┖──────┸━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
+const AddedContentBottomStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.BottomLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
 
 let currentTxtFilePath = '';
 let currentColumnNameRowIdx = 0;
@@ -24,6 +118,7 @@ let frontStatuBar : StatusBarItem;
 let lastSelectLine : number = -1;
 let currentState : TextState = TextState.NoText;
 let currentTextEditor : TextEditor | undefined = undefined;
+let addedLineDic : Map<string, Array<LineInfo>> = new Map();
 
 export function init(context : ExtensionContext) : void {
 	selfContext = context;
@@ -50,24 +145,46 @@ export function init(context : ExtensionContext) : void {
 	currentTextEditor = activeTextEditor;
 	if(activeTextEditor) {
 		editUtil.getInstance.init(activeTextEditor);
+
 		deleteAddLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
 		updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
+
+		editUtil.getInstance.addEdit(editBuilder => {
+								editBuilder.insert(new Position(0, 0), '1\n');
+								LogUtil.debug('1');
+							})
+							.startEdit()
+							.then(_ => LogUtil.debug('2'))
+							.addEdit(editBuilder => {
+								editBuilder.insert(new Position(0, 0), '2\n');
+								LogUtil.debug('3');
+							})
+							.startEdit()
+							.then(_ => LogUtil.debug('4'))
+							.addEdit(editBuilder => {
+								editBuilder.insert(new Position(0, 0), '3\n');
+								LogUtil.debug('5');
+							})
+							.startEdit()
+							.then(_ => LogUtil.debug('6'));
 		// editUtil.getInstance.addEdit(editBuilder => {
-		// 						LogUtil.debug(`add 1, time: ${timeUtil.getTimeDetail()}`);
-		// 						editBuilder.insert(new Position(0, 0), '1\n')
+		// 						LogUtil.debug(`add 1`);
+		// 						editBuilder.insert(new Position(0, 0), '1\n');
 		// 					}).startEdit()
 		// 					.then(_ => {
-		// 						LogUtil.debug(`add 1 complete, time: ${timeUtil.getTimeDetail()}`);
+		// 						LogUtil.debug(`add 1 complete`);
 		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
 		// 						LogUtil.debug(editUtil.getInstance.isEditing());
+		// 						LogUtil.debug(`isDirty: ${activeTextEditor.document.isDirty}`);
 		// 					}).addEdit(editBuilder => {
-		// 						LogUtil.debug(`add 2, time: ${timeUtil.getTimeDetail()}`);
-		// 						editBuilder.insert(new Position(0, 0), '2\n')
-		// 					})//.startEdit()
+		// 						LogUtil.debug(`add 2`);
+		// 						editBuilder.insert(new Position(0, 0), '2\n');
+		// 					}).startEdit()
 		// 					.then(_ => {
-		// 						LogUtil.debug(`add 2 complete, time: ${timeUtil.getTimeDetail()}`);
+		// 						LogUtil.debug(`add 2 complete`);
 		// 						LogUtil.debug(activeTextEditor.document.lineAt(0).text);
 		// 						LogUtil.debug(editUtil.getInstance.isEditing());
+		// 						LogUtil.debug(`isDirty: ${activeTextEditor.document.isDirty}`);
 		// 					});
 		// editUtil.getInstance.addEdit(editBuilder => editBuilder.delete(new Range(new Position(0, 0), new Position(3, 0))))
 		// 					.addEdit(editBuilder => editBuilder.insert(new Position(3, 0), '1\n'))
@@ -114,11 +231,21 @@ function formatTxt(): void {
 	currentTxtFilePath = '';
 	const separatorRowData = [];
 	for(let idx = 0; idx < columnCount; ++ idx) {
-		separatorRowData.push('-');
+		separatorRowData.push(SeparatorChar[SeparatorType.Horizontal]);
 	}
-	let content = getNewColumnData(separatorRowData, rowMaxSizeList, '-', '+-', '-+-', '-+');
+	let content = getNewColumnData(separatorRowData,
+								   rowMaxSizeList,
+								   SeparatorChar[SeparatorType.Horizontal],
+								   SeparatorChar[SeparatorType.TopLeft] + SeparatorChar[SeparatorType.Horizontal],
+								   SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.TopCenter] + SeparatorChar[SeparatorType.Horizontal],
+								   SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.TopRight]);
 	content += getNewColumnData(rowDataList[0], rowMaxSizeList);
-	content += getNewColumnData(separatorRowData, rowMaxSizeList, '-', '+-', '-+-', '-+');
+	content += getNewColumnData(separatorRowData,
+								rowMaxSizeList,
+								SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.MiddleLeft] + SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.MiddleCenter] + SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.MiddleRight]);
 	for(let idx = 1; idx < lineCount; ++ idx) {
 		if(! rowDataList[idx]) { continue; }
 		if(rowDataList[idx].length === 1 && rowDataList[idx][0].trim().length === 0) {
@@ -126,7 +253,12 @@ function formatTxt(): void {
 		}
 		content += getNewColumnData(rowDataList[idx], rowMaxSizeList);
 	}
-	content += getNewColumnData(separatorRowData, rowMaxSizeList, '-', '+-', '-+-', '-+');
+	content += getNewColumnData(separatorRowData,
+								rowMaxSizeList,
+								SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.BottomLeft] + SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomCenter] + SeparatorChar[SeparatorType.Horizontal],
+								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomRight]);
 	activeTextEditor.edit(editBuilder => {
 		const startPos = new Position(0, 0);
 		const endPos = new Position(lineCount + 1, 0);
@@ -157,7 +289,7 @@ function undoFormatTxt(): void {
 			canExecute = true;
 			continue;
 		}
-		if(isAddedTitle(data) || isAddedSeparator(data)) { return; }
+		if(isAddedTitle(data) || isAddedContent(data)) { return; }
 		const rowData : string[] = data.split(' | ');
 		const length = rowData.length;
 		rowData[0] = rowData[0].substr(1);
@@ -179,7 +311,7 @@ function undoFormatTxt(): void {
 				editBuilder.replace(new Range(startPos, endPos), content);
 			}).startEdit()
 			.then(_ => {
-					updateCommandStatusBar()
+					updateCommandStatusBar();
 			});
 	updateSelectInfo(document, activeTextEditor.selection.start, true, -1);
 }
@@ -310,7 +442,7 @@ function updateCommandStatusBar() : void {
 	if(currentState === TextState.TextNormal) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
-	} else if(currentState == TextState.TextFormat) {
+	} else if(currentState === TextState.TextFormat) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
 	}
@@ -344,12 +476,9 @@ function openWebView() : void {
 	const { lineCount } = document;
 	let line = 0;
 	for(let idx = 0; idx < lineCount; ++ idx) {
-		const data = document.lineAt(idx).text;
+		const data = document.lineAt(idx).text.trim();
 		if(data.length === 0) { continue; }
-		if(data.indexOf('-+-') !== -1) {
-			continue;
-		}
-		if(isAddedTitle(data) || isAddedSeparator(data)) { continue; }
+		if(! isTitle(data) && ! isContent(data)) { continue; }
 		const rowData : string[] = data.split(separator);
 		const length = rowData.length;
 		if(rowData[0].charAt(0) === '|' && length > 0) {
@@ -409,8 +538,6 @@ function onTextEditorChange(editor: TextEditor | undefined) {
 	editUtil.getInstance.init(editor);
 	currentTextEditor = editor;
 	const filePath = editor.document.fileName;
-	const addLineInfoList = addLineInfoDic.get(filePath);
-	if(addLineInfoList) { addLineInfoList.length = 0; }
 	if(webViewStatusBar) { webViewStatusBar.show(); }
 	updateSelectInfo(editor.document, editor.selection.start);
 }
@@ -455,7 +582,7 @@ function updateSeparator(document : TextDocument, position : Position) : void {
 	if(lineInfoList.length > 0) {
 		const count = lineInfoList.length;
 		for(let idx = 0; idx < count; ++ idx) {
-			if(lineInfoList[idx].lineType == LineType.LineTypeSeparator) {
+			if(lineInfoList[idx].lineType === LineType.LineTypeSeparator) {
 				if(lineInfoList[idx].startPosition + 1 === position.line) { previousIsAdd = true; }
 				if(lineInfoList[idx].endPosition === position.line + 2) { nextIsAdd = true; }
 				continue;
@@ -490,8 +617,8 @@ function updateSeparator(document : TextDocument, position : Position) : void {
 }
 
 function getAddLineByType(fileName : string, lineType : LineType) : LineInfo[] {
-	if(! addLineInfoDic.has(fileName)) { addLineInfoDic.set(fileName, new Array<LineInfo>()); }
-	const lineInfoList = addLineInfoDic.get(fileName);
+	if(! addedLineDic.has(fileName)) { addedLineDic.set(fileName, new Array<LineInfo>()); }
+	const lineInfoList = addedLineDic.get(fileName);
 	if(lineInfoList === undefined) { return []; }
 	return lineInfoList.filter(value => value.lineType === lineType);
 }
@@ -501,8 +628,8 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
 		return undefined;
 	}
-	if(! addLineInfoDic.has(fileName)) { addLineInfoDic.set(fileName, new Array<LineInfo>()); }
-	const lineInfoList = addLineInfoDic.get(fileName);
+	if(! addedLineDic.has(fileName)) { addedLineDic.set(fileName, new Array<LineInfo>()); }
+	const lineInfoList = addedLineDic.get(fileName);
 	if(lineInfoList === undefined || lineInfoList.length === 0) { return undefined; }
 	let count = lineInfoList.length;
 	const callbackList : Array<(editBuilder: TextEditorEdit) => void> = new Array();
@@ -524,7 +651,7 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 	
 	const deleteRangeList = new Array<Range>();
 	for(let idx = 0; idx < deleteCount; ++ idx) {
-		const deleteIdx = deleteIdxList[idx]
+		const deleteIdx = deleteIdxList[idx];
 		const deleteLineInfo = lineInfoList[deleteIdx];
 		const startPos = new Position(deleteLineInfo.startPosition, 0);
 		const endPos = new Position(deleteLineInfo.endPosition, 0);
@@ -539,7 +666,7 @@ function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBui
 		return callbackList;
 	}
 	for(let idx = deleteCount - 1; idx >= 0; -- idx) {
-		const deleteIdx = deleteIdxList[idx]
+		const deleteIdx = deleteIdxList[idx];
 		const deleteLineInfo = lineInfoList[deleteIdx];
 		lineInfoList.splice(deleteIdx, 1);
 		count -= 1;
@@ -561,10 +688,10 @@ function addLine(fileName : string, lineInfo : LineInfo, offset : number = 0) : 
 	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
 		return undefined;
 	}
-	let lineInfoList = addLineInfoDic.get(fileName);
+	let lineInfoList = addedLineDic.get(fileName);
 	if(lineInfoList === undefined) {
 		lineInfoList = new Array<LineInfo>();
-		addLineInfoDic.set(fileName, lineInfoList);
+		addedLineDic.set(fileName, lineInfoList);
 	}
 	const count = lineInfoList.length;
 	const addLineCount = lineInfo.endPosition - lineInfo.startPosition;
@@ -599,7 +726,13 @@ function onTextEditorSelectChange(event : vscode.TextEditorSelectionChangeEvent)
 	updateSeparator(activeTextEditor.document, position);
 }
 
+let lastVersion = 0;
 function update() : void {
+	if(! currentTextEditor) { return; }
+	if(currentTextEditor.document.version !== lastVersion) {
+		// LogUtil.info(`version: ${lastVersion}, last version: ${currentTextEditor.document.version}`);
+		lastVersion = currentTextEditor.document.version;
+	}
 	checkCurrentState();
 	updateCommandStatusBar();
 	checkVisibleRangeChange();
@@ -698,6 +831,7 @@ function getStringLength(data : string) : number {
 	let result = dataLength;
 	for(let idx = 0; idx < dataLength; ++ idx) {
 		if(data.charCodeAt(idx) & 0xFF00) {
+			if(SeparatorChar.indexOf(data.charAt(idx)) !== -1) { continue; }
 			++ result;
 		}
 	}
@@ -718,9 +852,9 @@ function alignString(data : string, maxWidth : number, fillChar : string = ' ') 
 function getNewColumnData(rowData : string[],
 						  rowMaxWidthList : number[],
 						  fillChar : string = ' ',
-						  startChar : string = '| ',
-						  intervalChar : string = ' | ',
-						  endchar : string = ' |') : string {
+						  startChar : string = '║ ',
+						  intervalChar : string = ' ║ ',
+						  endchar : string = ' ║') : string {
 	if(! rowData || rowData.length === 0) { return ''; }
 	let line = startChar + alignString(rowData[0], rowMaxWidthList[0], fillChar);
 	const length = rowData.length;
@@ -730,31 +864,33 @@ function getNewColumnData(rowData : string[],
 	return line += endchar + '\n';
 }
 
-// +  ID  + 技能类型  +     技能名称     + 冷却时间 +
+// ╠  ID  ╬ 技能类型  ╬     技能名称     ╬ 冷却时间 ╣
 function isTitle(line : string) : boolean {
-	return line.startsWith('+ ');
+	return line.startsWith(TitleStartStr);
 }
 
-// |  2   |    31     |     召唤技能     |    15    |
+// ║  2   ║    31     ║     召唤技能     ║    15    ║
 function isContent(line : string) : boolean {
-	return line.startsWith('| ');
+	return line.startsWith(ContentStartStr);
 }
 
-// +------+-----------+------------------+----------+
+// ╔══════╦═══════════╦══════════════════╦══════════╗
+// ╠══════╬═══════════╬══════════════════╬══════════╣
+// ╚══════╩═══════════╩══════════════════╩══════════╝
 function isSeparator(line : string) : boolean {
-	return line.startsWith('+-');
+	return line.startsWith(TopStartStr) || line.startsWith(MiddleStartStr) || line.startsWith(BottomStartStr);
 }
 
-// --------------------------------------------------
-// -  ID  - 技能类型  -     技能名称     - 冷却时间 -
-// --------------------------------------------------
+// ╒══════╤═══════════╤══════════════════╤══════════╕
+// ┆  ID  ┆ 技能类型  ┆     技能名称     ┆ 冷却时间 ┆
+// ╘══════╧═══════════╧══════════════════╧══════════╛
 function isAddedTitle(line : string) : boolean {
-	return line.startsWith('--') || line.startsWith('- ');
+	return line.startsWith(AddedTitleTopStartStr) || line.startsWith(AddedTitleStartStr) || line.startsWith(AddedTitleBottomStartStr);
 }
 
-// ==================================================
-// |  23  |    62     |    狙击炮技能    |    20    |
-// ==================================================
-function isAddedSeparator(line : string) : boolean {
-	return line.startsWith('==');
+// ┏━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+// ┇  23  ┇    62     ┇    狙击炮技能    ┇    20    ┇
+// ┖──────┸━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
+function isAddedContent(line : string) : boolean {
+	return line.startsWith(AddedContentTopStartStr) || line.startsWith(AddedContentStartStr) || line.startsWith(AddedContentBottomStartStr);
 }

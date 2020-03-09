@@ -1,5 +1,4 @@
 
-
 function getString(value : number, digit : number) : string {
 	const valueStr = value.toString();
 	const length = valueStr.length;
