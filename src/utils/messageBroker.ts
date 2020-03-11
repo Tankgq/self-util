@@ -1,9 +1,14 @@
 import { Subject } from "rxjs";
-import { TextState } from "../constant";
+import { TextStatus } from "../constant";
+import { TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, Position, TextEditorSelectionChangeEvent } from 'vscode';
 
 export enum MessageCode {
     Null,
-    UpdateTextState,
+    VisibleRangesChange,
+    TextDocumentChange,
+    UpdateTextStatus,
+    UpdateCommandStatusBar,
+    TextEditorSelectChange,
     All
 }
 
@@ -13,7 +18,7 @@ export function hasSubject(messageCode : MessageCode) : boolean {
     return messageCode !== MessageCode.Null && subjectDic.has(messageCode);
 }
 
-export function AddSubject(messageCode : MessageCode, subject : Subject<any>) : void {
+export function addSubject(messageCode : MessageCode, subject : Subject<any>) : void {
     if(messageCode === MessageCode.Null || ! subject) { return; }
     let sourceSubject = subjectDic.get(messageCode);
     if(sourceSubject) {
@@ -29,7 +34,7 @@ export function sendMessage(messageCode : MessageCode, ... msg : any) : void {
     if(messageCode === MessageCode.Null) { return; }
     const subject = subjectDic.get(messageCode);
     if(! subject) { return; }
-    subject.next(msg);
+    subject.next.apply(subject, msg);
 }
 
 export function dispose(messageCode: MessageCode) : void {
@@ -51,7 +56,22 @@ export function dispose(messageCode: MessageCode) : void {
     subjectDic.delete(messageCode);
 }
 
-export function sendUpdateTextStateMessage(textState : TextState) : void {
-    sendMessage(MessageCode.UpdateTextState, textState);
+export function sendVisibleRangesChangeMessage(event : TextEditorVisibleRangesChangeEvent) : void {
+    sendMessage(MessageCode.VisibleRangesChange, event);
 }
 
+export function sendTextDocumentChangeMessage(event : TextDocumentChangeEvent) : void {
+    sendMessage(MessageCode.TextDocumentChange, event);
+}
+
+export function sendUpdateTextStatusMessage(textStatus ?: TextStatus) : void {
+    sendMessage(MessageCode.TextDocumentChange, textStatus);
+}
+
+export function sendUpdateCommandStatusBar() : void {
+    sendMessage(MessageCode.UpdateCommandStatusBar);
+}
+
+export function sendTextEditorSelectChange(event ?: TextEditorSelectionChangeEvent) : void {
+    sendMessage(MessageCode.TextEditorSelectChange, event);
+}

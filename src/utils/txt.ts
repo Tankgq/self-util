@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import * as constant from '../constant';
-import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent } from 'vscode';
+import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent } from 'vscode';
 import * as path from 'path';
 import * as webviewUtil from './webviewUtil';
 import * as editUtil from './editUtil';
-import { TextState } from '../constant';
+import { TextStatus as TextStatus } from '../constant';
 import * as logUtil from './logUtil';
 import * as messageBroker from './messageBroker';
 import { interval, fromEvent, Subject, UnaryFunction, Observable, ConnectableObservable } from 'rxjs';
@@ -46,10 +46,14 @@ const SeparatorChar = [' ', '═', '║', '┃', '╔', '╦', '╗', '╠', '�
 const TopStartStr = SeparatorChar[SeparatorType.TopLeft] + SeparatorChar[SeparatorType.Horizontal];
 // ┃  ID  ┃ 技能类型  ┃     技能名称     ┃ 冷却时间 ┃
 const TitleStartStr = SeparatorChar[SeparatorType.TitleVertical] + SeparatorChar[SeparatorType.FillChar];
+const TitleSeparatorStr = SeparatorChar[SeparatorType.FillChar] + SeparatorChar[SeparatorType.TitleVertical] + SeparatorChar[SeparatorType.FillChar];
+const TitleEndStr = SeparatorChar[SeparatorType.FillChar] + SeparatorChar[SeparatorType.TitleVertical];
 // ╠══════╬═══════════╬══════════════════╬══════════╣
 const MiddleStartStr = SeparatorChar[SeparatorType.MiddleLeft] + SeparatorChar[SeparatorType.Horizontal];
 // ║  2   ║    31     ║     召唤技能     ║    15    ║
 const ContentStartStr = SeparatorChar[SeparatorType.Vertical] + SeparatorChar[SeparatorType.FillChar];
+const ContentSeparatorStr = SeparatorChar[SeparatorType.FillChar] + SeparatorChar[SeparatorType.Vertical] + SeparatorChar[SeparatorType.FillChar];
+const ContentEndStr = SeparatorChar[SeparatorType.FillChar] + SeparatorChar[SeparatorType.Vertical];
 // ╚══════╩═══════════╩══════════════════╩══════════╝
 const BottomStartStr = SeparatorChar[SeparatorType.BottomLeft] + SeparatorChar[SeparatorType.Horizontal];
 
@@ -98,18 +102,18 @@ enum AddedContentSeparatorType {
 // AddedContentSeparatorType.TopLeft: '┏'
 // AddedContentSeparatorType.TopCenter: '┳'
 // AddedContentSeparatorType.TopRight: '┓'
-// AddedContentSeparatorType.BottomLeft: '┖'
+// AddedContentSeparatorType.BottomLeft: '┗'
 // AddedContentSeparatorType.BottomCenter: '┻'
 // AddedContentSeparatorType.BottomRight: '┛'
-const AddedContentSeparatorChar = [' ', '━', '┇', '┏', '┳', '┓', '┖', '┻', '┛'];
+const AddedContentSeparatorChar = [' ', '━', '┇', '┏', '┳', '┓', '┗', '┻', '┛'];
 // ┏━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
 const AddedContentTopStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.TopLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
 // ┇  23  ┇    62     ┇    狙击炮技能    ┇    20    ┇
 const AddedContentStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.Vertical] + AddedContentSeparatorChar[AddedContentSeparatorType.FillChar];
-// ┖──────┸━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
+// ┗━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
 const AddedContentBottomStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.BottomLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
 
-let currentTxtFilePath = '';
+let currentFilePath = '';
 let currentColumnNameRowIdx = 0;
 let currentColumnNameList : string[] = [];
 let commandStatusBar : StatusBarItem;
@@ -119,15 +123,13 @@ let selfContext : ExtensionContext;
 let headerStatuBar : StatusBarItem;
 let frontStatuBar : StatusBarItem;
 let lastSelectLine : number = -1;
-let currentState : TextState = TextState.NoText;
+let currentTextStatus : TextStatus = TextStatus.NoText;
 let currentTextEditor : TextEditor | undefined = undefined;
 let addedLineDic : Map<string, Array<LineInfo>> = new Map();
 
-let scrollSubject : Subject<TextEditorVisibleRangesChangeEvent> = new Subject();
-let documentSubject : Subject<TextDocumentChangeEvent> = new Subject();
-
 export function init(context : ExtensionContext) : void {
 	selfContext = context;
+	currentTextEditor = vscode.window.activeTextEditor;
 	let disposable;
 
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TEXT_FORMAT, formatTxt);
@@ -142,34 +144,29 @@ export function init(context : ExtensionContext) : void {
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TXT_OPEN_WEBVIEW, openWebView);
 	selfContext.subscriptions.push(disposable);
 
-	vscode.window.onDidChangeTextEditorSelection(onTextEditorSelectChange);
+	const updateTextStatusSubject = new Subject<TextStatus | undefined>();
+	messageBroker.addSubject(MessageCode.UpdateTextStatus, updateTextStatusSubject);
+	updateTextStatusSubject.subscribe(textState => updateTextStatus(textState));
 
 	vscode.workspace.onWillSaveTextDocument(onWillSave);
+	
+	vscode.workspace.onDidChangeTextDocument(event => messageBroker.sendTextDocumentChangeMessage(event));
+	const documentChangeSubject = new Subject<TextDocumentChangeEvent>();
+	messageBroker.addSubject(MessageCode.TextDocumentChange, documentChangeSubject);
+	documentChangeSubject.subscribe(event => onTextDocumentChange(event));
+	
+	vscode.window.onDidChangeTextEditorVisibleRanges(event => messageBroker.sendVisibleRangesChangeMessage(event));
+	const visibleRangeChangedSubject = new Subject<TextEditorVisibleRangesChangeEvent>();
+	messageBroker.addSubject(MessageCode.VisibleRangesChange, visibleRangeChangedSubject);
+	visibleRangeChangedSubject.pipe(throttleTime(500)).subscribe(event => onVisibleRangeChanged(event));
+	
+	vscode.window.onDidChangeTextEditorSelection(event => messageBroker.sendTextEditorSelectChange(event));
+	const textEditorSelectChangeSubject = new Subject<TextEditorSelectionChangeEvent | undefined>();
+	messageBroker.addSubject(MessageCode.TextEditorSelectChange, textEditorSelectChangeSubject);
+	textEditorSelectChangeSubject.pipe(throttleTime(500)).subscribe(event => onTextEditorSelectChange(event));
+	// interval(500).subscribe(_ => update());
 
-	vscode.workspace.onDidChangeTextDocument(event => documentSubject.next(event));
-	documentSubject.subscribe(event => {
-		const { contentChanges } = event;
-		if(! contentChanges || contentChanges.length === 0 || ! contentChanges[0]) { return; }
-		const contentChange = contentChanges[0];
-		const { start, end } = contentChange.range;
-		logUtil.info(`range: (${start.line}, ${start.character}), end: (${end.line}, ${end.character}), text: ${contentChange.text}`);
-	});
-
-	vscode.window.onDidChangeTextEditorVisibleRanges(event => {
-		scrollSubject.next(event);
-	});
-	scrollSubject.pipe(throttleTime(500)).subscribe(event => {
-		const { visibleRanges } = event;
-		if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0]) { return; }
-		const { start, end } = visibleRanges[0];
-		logUtil.debug(`start: (${start.line}, ${start.character}), end: (${end.line}, ${end.character})`);
-		messageBroker.sendUpdateTextStateMessage(TextState.NoText);
-	});
-
-	interval(500).subscribe(_ => update());
-
-	updateCurrentActiveTextEditor();
-	checkCurrentState();
+	updateTextStatus();
 
 	updateCommandStatusBar();
 	initWebViewStatusBarItem();
@@ -179,8 +176,7 @@ export function init(context : ExtensionContext) : void {
 	currentTextEditor = activeTextEditor;
 	if(activeTextEditor) {
 		editUtil.getInstance.init(activeTextEditor);
-
-		deleteAddLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
+		deleteAddedLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
 		updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
 		// editUtil.getInstance.addEdit(editBuilder => {
 		// 						editBuilder.insert(new Position(0, 0), '1\n');
@@ -203,11 +199,6 @@ export function init(context : ExtensionContext) : void {
 	}
 }
 
-function updateCurrentActiveTextEditor() : void {
-	const { activeTextEditor } = vscode.window;
-	if(currentTextEditor !== activeTextEditor) { currentTextEditor = activeTextEditor; }
-}
-
 function formatTxt(): void {
 	if(! currentTextEditor) { return; }
 	const { document } = currentTextEditor;
@@ -215,12 +206,12 @@ function formatTxt(): void {
 	let columnCount = 0;
 	const rowDataList : Array<string[]> = [];
 	const rowMaxSizeList = [];
-	let tabCount = 0;
+	// let tabCount = 0;
 	for(let idx = 0; idx < lineCount; ++ idx) {
 		const line = document.lineAt(idx);
-		const rowData : string [] = line.text.split('\t');
+		const rowData : string[] = line.text.split('\t');
 		const length = rowData.length;
-		tabCount += length;
+		// tabCount += length;
 		columnCount = Math.max(columnCount, length);
 		while(rowMaxSizeList.length < columnCount) {
 			rowMaxSizeList.push(0);
@@ -231,11 +222,11 @@ function formatTxt(): void {
 		}
 		rowDataList.push(rowData);
 	}
-	if(lineCount === tabCount) {
-		logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_FORMAT} 失败`);
-		return;
-	}
-	currentTxtFilePath = '';
+	// if(lineCount === tabCount) {
+	// 	logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_FORMAT} 失败`);
+	// 	return;
+	// }
+	currentFilePath = '';
 	const separatorRowData = [];
 	for(let idx = 0; idx < columnCount; ++ idx) {
 		separatorRowData.push(SeparatorChar[SeparatorType.Horizontal]);
@@ -246,7 +237,12 @@ function formatTxt(): void {
 								   SeparatorChar[SeparatorType.TopLeft] + SeparatorChar[SeparatorType.Horizontal],
 								   SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.TopCenter] + SeparatorChar[SeparatorType.Horizontal],
 								   SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.TopRight]);
-	content += getNewColumnData(rowDataList[0], rowMaxSizeList);
+	content += getNewColumnData(rowDataList[0],
+								rowMaxSizeList,
+								SeparatorChar[SeparatorType.FillChar],
+								TitleStartStr,
+								TitleSeparatorStr,
+								TitleEndStr);
 	content += getNewColumnData(separatorRowData,
 								rowMaxSizeList,
 								SeparatorChar[SeparatorType.Horizontal],
@@ -255,7 +251,7 @@ function formatTxt(): void {
 								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.MiddleRight]);
 	for(let idx = 1; idx < lineCount; ++ idx) {
 		if(! rowDataList[idx]) { continue; }
-		if(rowDataList[idx].length === 1 && rowDataList[idx][0].trim().length === 0) {
+		if(rowDataList[idx][0].trim().length === 0) {
 			continue;
 		}
 		content += getNewColumnData(rowDataList[idx], rowMaxSizeList);
@@ -266,17 +262,16 @@ function formatTxt(): void {
 								SeparatorChar[SeparatorType.BottomLeft] + SeparatorChar[SeparatorType.Horizontal],
 								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomCenter] + SeparatorChar[SeparatorType.Horizontal],
 								SeparatorChar[SeparatorType.Horizontal] + SeparatorChar[SeparatorType.BottomRight]);
-	currentTextEditor.edit(editBuilder => {
-		const startPos = new Position(0, 0);
-		const endPos = new Position(lineCount + 1, 0);
-		editBuilder.replace(new Range(startPos, endPos), content);
-	});
-	
-	if(commandStatusBar) {
-		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
-		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
-	}
-	updateSelectInfo(document, currentTextEditor.selection.start, true, 1);
+	editUtil.getInstance.addEdit(editBuilder => {
+							const startPos = new Position(0, 0);
+							const endPos = new Position(lineCount + 1, 0);
+							editBuilder.replace(new Range(startPos, endPos), content);
+						}).startEdit()
+						.then(_ => {
+							messageBroker.sendUpdateTextStatusMessage(TextStatus.TextFormat);
+							messageBroker.sendUpdateCommandStatusBar();
+							messageBroker.sendTextEditorSelectChange();
+						});
 }
 
 function undoFormatTxt(): void {
@@ -292,16 +287,14 @@ function undoFormatTxt(): void {
 	
 	for(let idx = 0; idx < lineCount; ++ idx) {
 		const data = document.lineAt(idx).text;
-		if(data.length === 0) { continue; }
-		if(data.indexOf('-+-') !== -1) {
-			canExecute = true;
-			continue;
-		}
-		if(isAddedTitle(data) || isAddedContent(data)) { return; }
-		const rowData : string[] = data.split(' | ');
+		let rowData = undefined;
+		if(isContent(data)) { rowData = data.split(SeparatorChar[SeparatorType.Vertical]); }
+		else if(isTitle(data)) { rowData = data.split(SeparatorChar[SeparatorType.TitleVertical]); }
+		else { continue; }
+		canExecute = true;
+		rowData.shift();
+		rowData.pop();
 		const length = rowData.length;
-		rowData[0] = rowData[0].substr(1);
-		rowData[length - 1] = rowData[length - 1].substr(0, rowData[length - 1].length - 1);
 		for(let idx2 = 0; idx2 < length; ++ idx2) {
 			rowData[idx2] = rowData[idx2].trim();
 		}
@@ -311,7 +304,7 @@ function undoFormatTxt(): void {
 		logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_UNDO_FORMAT} 失败`);
 		return;
 	}
-	currentTxtFilePath = '';
+	currentFilePath = '';
 	editUtil.getInstance
 			.addEdit(editBuilder => {
 				const startPos = new Position(0, 0);
@@ -319,15 +312,16 @@ function undoFormatTxt(): void {
 				editBuilder.replace(new Range(startPos, endPos), content);
 			}).startEdit()
 			.then(_ => {
-					updateCommandStatusBar();
+				messageBroker.sendUpdateTextStatusMessage(TextStatus.TextFormat);
+				messageBroker.sendUpdateCommandStatusBar();
+				messageBroker.sendTextEditorSelectChange();
 			});
-	updateSelectInfo(document, activeTextEditor.selection.start, true, -1);
 }
 
 function updateCurrentFileHeaderInfo(document : TextDocument, separator : string, rowNameOffset = 0) : void {
 	let columnCount = currentColumnNameList.length;
-	if(columnCount === 0 || currentTxtFilePath !== document.fileName) {
-		currentTxtFilePath = document.fileName;
+	if(columnCount === 0 || currentFilePath !== document.fileName) {
+		currentFilePath = document.fileName;
 		currentColumnNameList = [];
 		const { lineCount } = document;
 		for(let idx = 0; idx < lineCount; ++ idx) {
@@ -392,8 +386,7 @@ class LineInfo {
 }
 
 function getCurrentColumnInfo(document: TextDocument, position: Position, rowNameOffset = 0) : ColumnInfo | undefined {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) {
 		return undefined;
 	}
 	
@@ -439,7 +432,7 @@ function provideTxtHover(document: TextDocument, position: Position, token: Canc
 }
 
 function updateCommandStatusBar() : void {
-	if(currentState === TextState.NoText) {
+	if(currentTextStatus === TextStatus.NoText) {
 		if(commandStatusBar) { commandStatusBar.hide(); }
 		return;
 	}
@@ -447,10 +440,10 @@ function updateCommandStatusBar() : void {
 		commandStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
 	}
 
-	if(currentState === TextState.TextNormal) {
+	if(currentTextStatus === TextStatus.TextNormal) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
-	} else if(currentState === TextState.TextFormat) {
+	} else if(currentTextStatus === TextStatus.TextFormat) {
 		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
 		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
 	}
@@ -530,24 +523,18 @@ function initWebViewStatusBarItem() : void {
 function onTextEditorChange(editor: TextEditor | undefined) {
 	if(currentTextEditor) {
 		logUtil.debug(`[onTextEditorChange] previous file: ${currentTextEditor.document.fileName}`);
-		deleteAddLineByType(currentTextEditor.document.fileName, LineType.LineTypeAll);
-		editUtil.getInstance.init(undefined);
+		deleteAddedLineByType(currentTextEditor.document.fileName, LineType.LineTypeAll);
 	}
-	currentTxtFilePath = '';
 	currentTextEditor = undefined;
-	checkCurrentState();
-	updateCommandStatusBar();
-	if(! editor || editor.document.languageId !== constant.LANGUAGE_TEXT) {
-		if(webViewStatusBar) { webViewStatusBar.hide(); }
-		if(headerStatuBar) { headerStatuBar.hide(); }
-		if(frontStatuBar) { frontStatuBar.hide(); }
-		return;
+	currentFilePath = '';
+	if(editor && editor.document.languageId === constant.LANGUAGE_TEXT) {
+		currentTextEditor = editor;
+		currentFilePath = currentTextEditor.document.fileName;
 	}
-	editUtil.getInstance.init(editor);
-	currentTextEditor = editor;
-	const filePath = editor.document.fileName;
-	if(webViewStatusBar) { webViewStatusBar.show(); }
-	updateSelectInfo(editor.document, editor.selection.start);
+	editUtil.getInstance.init(currentTextEditor);
+	messageBroker.sendUpdateTextStatusMessage();
+	messageBroker.sendUpdateCommandStatusBar();
+	messageBroker.sendTextEditorSelectChange();
 }
 
 function updateSelectInfo(document : TextDocument, position : Position, forceUpdate = false, rowNameOffset = 0) : void {
@@ -578,7 +565,8 @@ function updateSelectInfo(document : TextDocument, position : Position, forceUpd
 }
 
 function updateSeparator(document : TextDocument, position : Position) : void {
-	if(currentState !== TextState.TextFormat) { return; }
+	return;
+	if(currentTextStatus !== TextStatus.TextFormat) { return; }
 	if(position.line === lastSelectLine) { return; }
 	if(editUtil.getInstance.isEditing()) { return; }
 	const line = document.lineAt(position.line).text;
@@ -599,7 +587,7 @@ function updateSeparator(document : TextDocument, position : Position) : void {
 			if(lineInfoList[idx].startPosition === position.line + 1) { nextIsAdd = true; }
 		}
 	}
-	const deleteEdit = deleteAddLineByType(document.fileName, LineType.LineTypeSeparator);
+	const deleteEdit = deleteAddedLineByType(document.fileName, LineType.LineTypeSeparator);
 	editUtil.getInstance.addEdit(deleteEdit);
 	if(position.line <= currentColumnNameRowIdx + 1 || position.line + 1 >= document.lineCount) {
 		if(deleteEdit) { editUtil.getInstance.startEdit(); }
@@ -631,7 +619,7 @@ function getAddLineByType(fileName : string, lineType : LineType) : LineInfo[] {
 	return lineInfoList.filter(value => value.lineType === lineType);
 }
 
-function deleteAddLineByType(fileName : string, lineType : LineType) : ((editBuilder: TextEditorEdit) => void) | undefined | Array<(editBuilder: TextEditorEdit) => void> {
+function deleteAddedLineByType(fileName : string, lineType : LineType) : ((editBuilder: TextEditorEdit) => void) | undefined | Array<(editBuilder: TextEditorEdit) => void> {
 	const { activeTextEditor } = vscode.window;
 	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
 		return undefined;
@@ -721,50 +709,49 @@ function addLine(fileName : string, lineInfo : LineInfo, offset : number = 0) : 
 	};
 }
 
-function onTextEditorSelectChange(event : vscode.TextEditorSelectionChangeEvent) {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
-		return;
-	}
-	const { selections } = event;
+function onTextEditorSelectChange(event ?: vscode.TextEditorSelectionChangeEvent) {
+	if(! currentTextEditor || currentTextStatus !== TextStatus.TextFormat) { return; }
+	const { selections } = event ? event : currentTextEditor;
 	if(! selections || selections.length === 0 || ! selections[0]) { return; }
 	const position = selections[0].start;
 	if(! position) {  return; }
-	updateSelectInfo(activeTextEditor.document, position);
-	updateSeparator(activeTextEditor.document, position);
+	updateSelectInfo(currentTextEditor.document, position);
+	updateSeparator(currentTextEditor.document, position);
 }
 
-function update() : void {
-	if(! currentTextEditor) { return; }
-	checkCurrentState();
-	updateCommandStatusBar();
-	checkVisibleRangeChange();
-}
+// function update() : void {
+// 	if(! currentTextEditor) { return; }
+// 	updateTextStatus();
+// 	updateCommandStatusBar();
+// 	checkVisibleRangeChange();
+// }
 
-function checkCurrentState() : void {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
-		currentState = TextState.NoText;
+function updateTextStatus(textStatus ?: TextStatus) : void {
+	if(textStatus) {
+		currentTextStatus = textStatus;
 		return;
 	}
-	const { document } = activeTextEditor;
+	if(! currentTextEditor || currentTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
+		currentTextStatus = TextStatus.NoText;
+		return;
+	}
+	const { document } = currentTextEditor;
 	const { lineCount } = document;
 	
 	for(let idx = 0; idx < lineCount; ++ idx) {
 		const data = document.lineAt(idx).text;
-		if(data.length === 0) { continue; }
-		if(data.indexOf('-+-') !== -1) {
-			currentState = TextState.TextFormat;
+		if(isTitle(data)) {
+			currentTextStatus = TextStatus.TextFormat;
 			return;
 		}
 	}
 
-	currentState = TextState.TextNormal;
+	currentTextStatus = TextStatus.TextNormal;
 }
 
 function checkVisibleRangeChange() : void {
 	if(! currentTextEditor) { return; }
-	if(currentState !== TextState.TextFormat) { return; }
+	if(currentTextStatus !== TextStatus.TextFormat) { return; }
 	if(editUtil.getInstance.isEditing()) { return; }
 	const { document } = currentTextEditor;
 	const filePath = document.fileName;
@@ -793,7 +780,7 @@ function checkVisibleRangeChange() : void {
 	const separator = getSeparator(document);
 	if(separator.length === 0 || separator === '\t') { return; }
 	updateCurrentFileHeaderInfo(document, separator);
-	const deleteEdit = deleteAddLineByType(filePath, LineType.LineTypeTitle);
+	const deleteEdit = deleteAddedLineByType(filePath, LineType.LineTypeTitle);
 	editUtil.getInstance.addEdit(deleteEdit);
 	if(startLine < currentColumnNameRowIdx + 2 || startLine + 3 > document.lineCount) {
 		if(deleteEdit) { editUtil.getInstance.startEdit(); }
@@ -801,7 +788,24 @@ function checkVisibleRangeChange() : void {
 	}
 	const header = document.getText(new Range(new Position(currentColumnNameRowIdx - 1, 0), new Position(currentColumnNameRowIdx + 2, 0)));
 	editUtil.getInstance.addEdit(addLine(filePath, new LineInfo(LineType.LineTypeTitle, header, startLine, startLine + 3), offset))
-					 .startEdit();
+						.startEdit();
+}
+
+function onVisibleRangeChanged(event : TextEditorVisibleRangesChangeEvent) : void {
+	const { visibleRanges } = event;
+	if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0]) { return; }
+	const { start, end } = visibleRanges[0];
+	logUtil.debug(`start: (${start.line}, ${start.character}), end: (${end.line}, ${end.character})`);
+	messageBroker.sendUpdateTextStatusMessage(TextStatus.NoText);
+}
+
+function onTextDocumentChange(event: TextDocumentChangeEvent) : void {
+	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) { return; }
+	const { contentChanges } = event;
+	if(! contentChanges || contentChanges.length === 0 || ! contentChanges[0]) { return; }
+	const contentChange = contentChanges[0];
+	const { start, end } = contentChange.range;
+	logUtil.info(`range: (${start.line}, ${start.character}), end: (${end.line}, ${end.character}), text: ${contentChange.text}`);
 }
 
 function onWillSave(event : TextDocumentWillSaveEvent) : void {
@@ -854,10 +858,10 @@ function alignString(data : string, maxWidth : number, fillChar : string = ' ') 
 
 function getNewColumnData(rowData : string[],
 						  rowMaxWidthList : number[],
-						  fillChar : string = ' ',
-						  startChar : string = '║ ',
-						  intervalChar : string = ' ║ ',
-						  endchar : string = ' ║') : string {
+						  fillChar : string = SeparatorChar[SeparatorType.FillChar],
+						  startChar : string = ContentStartStr,
+						  intervalChar : string = ContentSeparatorStr,
+						  endchar : string = ContentEndStr) : string {
 	if(! rowData || rowData.length === 0) { return ''; }
 	let line = startChar + alignString(rowData[0], rowMaxWidthList[0], fillChar);
 	const length = rowData.length;
@@ -867,7 +871,7 @@ function getNewColumnData(rowData : string[],
 	return line += endchar + '\n';
 }
 
-// ╠  ID  ╬ 技能类型  ╬     技能名称     ╬ 冷却时间 ╣
+// ┃  ID  ┃ 技能类型  ┃     技能名称     ┃ 冷却时间 ┃
 function isTitle(line : string) : boolean {
 	return line.startsWith(TitleStartStr);
 }
@@ -893,7 +897,7 @@ function isAddedTitle(line : string) : boolean {
 
 // ┏━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
 // ┇  23  ┇    62     ┇    狙击炮技能    ┇    20    ┇
-// ┖──────┸━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
+// ┗━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
 function isAddedContent(line : string) : boolean {
 	return line.startsWith(AddedContentTopStartStr) || line.startsWith(AddedContentStartStr) || line.startsWith(AddedContentBottomStartStr);
 }
