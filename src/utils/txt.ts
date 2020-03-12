@@ -1,15 +1,46 @@
+import { StatusBarPriority } from './../constant';
 import * as vscode from 'vscode';
 import * as constant from '../constant';
-import { Hover, ProviderResult, CancellationToken, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent } from 'vscode';
+import { Hover, ProviderResult, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent, CancellationToken } from 'vscode';
 import * as path from 'path';
 import * as webviewUtil from './webviewUtil';
 import * as editUtil from './editUtil';
 import { TextStatus as TextStatus } from '../constant';
 import * as logUtil from './logUtil';
 import * as messageBroker from './messageBroker';
-import { interval, fromEvent, Subject, UnaryFunction, Observable, ConnectableObservable } from 'rxjs';
+import { Subject } from 'rxjs';
 import { throttleTime } from 'rxjs/operators';
 import { MessageCode } from './messageBroker';
+
+class ColumnInfo {
+	readonly separator : string;
+	readonly line : string;
+	readonly idx : number;
+
+	constructor(line : string, separator : string, idx : number) {
+		this.separator = separator;
+		this.line = line;
+		this.idx = idx;
+	}
+}
+
+enum LineType {
+	LineTypeAll, LineTypeTitle, LineTypeSeparator
+}
+
+class LineInfo {
+	readonly lineType : LineType;
+	readonly content : string;
+	startPosition : number;
+	endPosition : number;
+
+	constructor(lineType : LineType, content : string, startPosition : number, endPosition : number = -1) {
+		this.lineType = lineType;
+		this.content = content;
+		this.startPosition = startPosition;
+		this.endPosition = endPosition === -1 ? startPosition + 1 : endPosition;
+	}
+}
 
 const GetWordRegExp = new RegExp(/[^\t \n]+/);
 const GetDigitRegExp = new RegExp(/(?<=[^:])"(\d+)"/g);
@@ -79,11 +110,11 @@ enum AddedTitleSeparatorType {
 // AddedTitleSeparatorType.BottomRight: '╛'
 const AddedTitleSeparatorChar = [' ', '═', '┆', '╒', '╤', '╗', '╘', '╧', '╛'];
 // ╒══════╤═══════════╤══════════════════╤══════════╕
-const AddedTitleTopStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
+const AddedTitleTopStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] + AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
 // ┆  ID  ┆ 技能类型  ┆     技能名称     ┆ 冷却时间 ┆
-const AddedTitleStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.FillChar];
+const AddedTitleStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.TopLeft] + AddedTitleSeparatorChar[AddedTitleSeparatorType.FillChar];
 // ╘══════╧═══════════╧══════════════════╧══════════╛
-const AddedTitleBottomStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.BottomLeft] +AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
+const AddedTitleBottomStartStr = AddedTitleSeparatorChar[AddedTitleSeparatorType.BottomLeft] + AddedTitleSeparatorChar[AddedTitleSeparatorType.Horizontal];
 
 enum AddedContentSeparatorType {
 	FillChar,
@@ -127,7 +158,7 @@ let currentTextStatus : TextStatus = TextStatus.NoText;
 let currentTextEditor : TextEditor | undefined = undefined;
 let addedLineDic : Map<string, Array<LineInfo>> = new Map();
 
-export function init(context : ExtensionContext) : void {
+export function initialize(context : ExtensionContext) : void {
 	selfContext = context;
 	currentTextEditor = vscode.window.activeTextEditor;
 	let disposable;
@@ -138,65 +169,86 @@ export function init(context : ExtensionContext) : void {
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TEXT_UNDO_FORMAT, undoFormatTxt);
 	selfContext.subscriptions.push(disposable);
 
-	disposable = vscode.languages.registerHoverProvider(constant.LANGUAGE_TEXT, {provideHover: provideTxtHover});
+	disposable = vscode.languages.registerHoverProvider(constant.LANGUAGE_TEXT, { provideHover: provideTxtHover });
 	selfContext.subscriptions.push(disposable);
 
 	disposable = vscode.commands.registerCommand(constant.COMMAND_TXT_OPEN_WEBVIEW, openWebView);
 	selfContext.subscriptions.push(disposable);
 
+	const { activeTextEditor } = vscode.window;
+	currentTextEditor = activeTextEditor;
+	if(currentTextEditor) { editUtil.getInstance.init(activeTextEditor); }
+	// editUtil.getInstance.addEdit(editBuilder => {
+	// 							editBuilder.insert(new Position(0, 0), '1\n');
+	// 							logUtil.trace('1');
+	// 						})
+	// 						.startEdit()
+	// 						.then(_ => logUtil.debug('2'))
+	// 						.addEdit(editBuilder => {
+	// 							editBuilder.insert(new Position(0, 0), '2\n');
+	// 							logUtil.info('3');
+	// 						})
+	// 						.startEdit()
+	// 						.then(_ => logUtil.warn('4'))
+	// 						.addEdit(editBuilder => {
+	// 							editBuilder.insert(new Position(0, 0), '3\n');
+	// 							logUtil.error('5');
+	// 						})
+	// 						.startEdit()
+	// 						.then(_ => logUtil.fatal('6'));
+
+	// 打开的文本改变时触发
+	vscode.window.onDidChangeActiveTextEditor(onTextEditorChange);
+
+	// 状态改变
 	const updateTextStatusSubject = new Subject<TextStatus | undefined>();
 	messageBroker.addSubject(MessageCode.UpdateTextStatus, updateTextStatusSubject);
 	updateTextStatusSubject.subscribe(textState => updateTextStatus(textState));
+	messageBroker.sendUpdateTextStatusMessage();
 
+	// 保存前触发
 	vscode.workspace.onWillSaveTextDocument(onWillSave);
 	
+	// 修改文本
 	vscode.workspace.onDidChangeTextDocument(event => messageBroker.sendTextDocumentChangeMessage(event));
 	const documentChangeSubject = new Subject<TextDocumentChangeEvent>();
 	messageBroker.addSubject(MessageCode.TextDocumentChange, documentChangeSubject);
 	documentChangeSubject.subscribe(event => onTextDocumentChange(event));
 	
+	// 竖直方向可视区域改变
 	vscode.window.onDidChangeTextEditorVisibleRanges(event => messageBroker.sendVisibleRangesChangeMessage(event));
 	const visibleRangeChangedSubject = new Subject<TextEditorVisibleRangesChangeEvent>();
 	messageBroker.addSubject(MessageCode.VisibleRangesChange, visibleRangeChangedSubject);
 	visibleRangeChangedSubject.pipe(throttleTime(500)).subscribe(event => onVisibleRangeChanged(event));
 	
+	// 选择的区域的改变
 	vscode.window.onDidChangeTextEditorSelection(event => messageBroker.sendTextEditorSelectChange(event));
 	const textEditorSelectChangeSubject = new Subject<TextEditorSelectionChangeEvent | undefined>();
 	messageBroker.addSubject(MessageCode.TextEditorSelectChange, textEditorSelectChangeSubject);
 	textEditorSelectChangeSubject.pipe(throttleTime(500)).subscribe(event => onTextEditorSelectChange(event));
-	// interval(500).subscribe(_ => update());
 
-	updateTextStatus();
+	// 更新左下角的命令按钮
+	const commandStatusBarSubject = new Subject<void>();
+	messageBroker.addSubject(MessageCode.UpdateCommandStatusBar, commandStatusBarSubject);
+	commandStatusBarSubject.subscribe(() => updateCommandStatusBar());
+	messageBroker.sendUpdateCommandStatusBar();
 
-	updateCommandStatusBar();
-	initWebViewStatusBarItem();
-	
-	vscode.window.onDidChangeActiveTextEditor(onTextEditorChange);
-	const { activeTextEditor } = vscode.window;
-	currentTextEditor = activeTextEditor;
-	if(activeTextEditor) {
-		editUtil.getInstance.init(activeTextEditor);
-		deleteAddedLineByType(activeTextEditor.document.fileName, LineType.LineTypeAll);
-		updateSelectInfo(activeTextEditor.document, activeTextEditor.selection.start);
-		// editUtil.getInstance.addEdit(editBuilder => {
-		// 						editBuilder.insert(new Position(0, 0), '1\n');
-		// 						logUtil.trace('1');
-		// 					})
-		// 					.startEdit()
-		// 					.then(_ => logUtil.debug('2'))
-		// 					.addEdit(editBuilder => {
-		// 						editBuilder.insert(new Position(0, 0), '2\n');
-		// 						logUtil.info('3');
-		// 					})
-		// 					.startEdit()
-		// 					.then(_ => logUtil.warn('4'))
-		// 					.addEdit(editBuilder => {
-		// 						editBuilder.insert(new Position(0, 0), '3\n');
-		// 						logUtil.error('5');
-		// 					})
-		// 					.startEdit()
-		// 					.then(_ => logUtil.fatal('6'));
-	}
+	const webviewStatusBarSubject = new Subject<void>();
+	messageBroker.addSubject(MessageCode.UpdateWebviewStatusBar, webviewStatusBarSubject);
+	webviewStatusBarSubject.subscribe(() => updateWebviewStatusBar());
+	messageBroker.sendUpdateWebviewStatusBar();
+
+	// 更新左下角的 Header 以及 Front 信息
+	const infoStatusBarSubject = new Subject<void>();
+	messageBroker.addSubject(MessageCode.UpdateInfoStatusBar, infoStatusBarSubject);
+	infoStatusBarSubject.subscribe(() => updateInfoStatusBar());
+	messageBroker.sendUpdateInfoStatusBar();
+
+	// 将当前选择区域的框出来
+	const emphasizeCurrentLineSubject = new Subject<{ position ?: number, bForceUpdate : boolean; }>();
+	messageBroker.addSubject(MessageCode.EmphasizeCurrentLine, emphasizeCurrentLineSubject);
+	emphasizeCurrentLineSubject.subscribe(param => updateEmphasizeCurrentLine(param.position, param.bForceUpdate));
+	messageBroker.sendEmphasizeCurrentLineMessage({ position : undefined, bForceUpdate : true });
 }
 
 function formatTxt(): void {
@@ -222,10 +274,6 @@ function formatTxt(): void {
 		}
 		rowDataList.push(rowData);
 	}
-	// if(lineCount === tabCount) {
-	// 	logUtil.showInfo(`执行 ${constant.COMMAND_TEXT_FORMAT} 失败`);
-	// 	return;
-	// }
 	currentFilePath = '';
 	const separatorRowData = [];
 	for(let idx = 0; idx < columnCount; ++ idx) {
@@ -283,7 +331,6 @@ function undoFormatTxt(): void {
 	const { lineCount } = document;
 	let content = '';
 	let canExecute = false;
-	const filePath = document.fileName;
 	
 	for(let idx = 0; idx < lineCount; ++ idx) {
 		const data = document.lineAt(idx).text;
@@ -305,17 +352,86 @@ function undoFormatTxt(): void {
 		return;
 	}
 	currentFilePath = '';
-	editUtil.getInstance
-			.addEdit(editBuilder => {
-				const startPos = new Position(0, 0);
-				const endPos = new Position(lineCount + 1, 0);
-				editBuilder.replace(new Range(startPos, endPos), content);
-			}).startEdit()
-			.then(_ => {
-				messageBroker.sendUpdateTextStatusMessage(TextStatus.TextFormat);
-				messageBroker.sendUpdateCommandStatusBar();
-				messageBroker.sendTextEditorSelectChange();
-			});
+	editUtil.getInstance.addEdit(editBuilder => {
+							const startPos = new Position(0, 0);
+							const endPos = new Position(lineCount + 1, 0);
+							editBuilder.replace(new Range(startPos, endPos), content);
+						})
+						.startEdit()
+						.then(_ => {
+							messageBroker.sendUpdateTextStatusMessage(TextStatus.TextNormal);
+							messageBroker.sendUpdateCommandStatusBar();
+							messageBroker.sendTextEditorSelectChange();
+						});
+}
+
+function updateCommandStatusBar() : void {
+	if(currentTextStatus === TextStatus.NoText) {
+		if(commandStatusBar) { commandStatusBar.hide(); }
+		return;
+	}
+	if(! commandStatusBar) { commandStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, StatusBarPriority.TxtCommand); }
+
+	if(currentTextStatus === TextStatus.TextNormal) {
+		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
+		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
+	} else if(currentTextStatus === TextStatus.TextFormat) {
+		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
+		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
+	}
+	commandStatusBar.color = constant.STATUS_BAR_ITEM_TXT_COMMAND_COLOR;
+	commandStatusBar.show();
+}
+
+function updateWebviewStatusBar() : void {
+	if(currentTextStatus === TextStatus.NoText) {
+		if(webViewStatusBar) { webViewStatusBar.hide(); }
+		return;
+	}
+	if(! webViewStatusBar) { webViewStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, StatusBarPriority.TxtWebview); }
+
+	webViewStatusBar.text = constant.STATUS_BAR_ITEM_TXT_WEBVIEW;
+	webViewStatusBar.command = constant.COMMAND_TXT_OPEN_WEBVIEW;
+	webViewStatusBar.color = constant.COMMAND_TXT_OPEN_WEBVIEW;
+	webViewStatusBar.show();
+}
+
+function updateInfoStatusBar() : void {
+	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) {
+		if(headerStatuBar) { headerStatuBar.hide(); }
+		if(frontStatuBar) { frontStatuBar.hide(); }
+		return;
+	}
+	if(! headerStatuBar) { headerStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, StatusBarPriority.TxtHeader); }
+	if(! frontStatuBar) { frontStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, StatusBarPriority.TxtFront); }
+	headerStatuBar.show();
+	frontStatuBar.show();
+	headerStatuBar.text = 'header';
+	frontStatuBar.text = 'front';
+	// var columnInfo = getCurrentColumnInfo(document, position, rowNameOffset);
+	// if(columnInfo === undefined) {
+	// 	headerStatuBar.text = '';
+	// 	frontStatuBar.text = '';
+	// 	return;
+	// }
+	// const currentInfo = getWordAtPosition(document, position);
+	// if(currentInfo.length === 0) {
+	// 	headerStatuBar.text = '';
+	// 	frontStatuBar.text = '';
+	// 	return;
+	// }
+	// const { idx, line, separator } = columnInfo;
+	// const currentRowData = line.split(separator);
+	// const columnCount = currentColumnNameList.length;
+	// const header = (columnCount > idx ? currentColumnNameList[idx] : '');
+	// frontStatuBar.text = `Front: ${currentRowData[0].trim()}, ${currentRowData[1].trim()}`;
+	// if(position.line === currentColumnNameRowIdx) { headerStatuBar.text = ''; } 
+	// else { headerStatuBar.text = `Col #${idx + 1}, ${header}`; }
+}
+
+function updateEmphasizeCurrentLine(position ?: number, bForceUpdate : boolean = false) : void {
+	logUtil.info(`position: ${position}, bForceUpdate: ${bForceUpdate}`);
+	return;
 }
 
 function updateCurrentFileHeaderInfo(document : TextDocument, separator : string, rowNameOffset = 0) : void {
@@ -355,36 +471,7 @@ function getCurrentLine(document : TextDocument, position : Position) : string {
 	return currentLine;
 }
 
-class ColumnInfo {
-	readonly separator : string;
-	readonly line : string;
-	readonly idx : number;
-
-	constructor(line : string, separator : string, idx : number) {
-		this.separator = separator;
-		this.line = line;
-		this.idx = idx;
-	}
-}
-
-enum LineType {
-	LineTypeAll, LineTypeTitle, LineTypeSeparator
-}
-
-class LineInfo {
-	readonly lineType : LineType;
-	readonly content : string;
-	startPosition : number;
-	endPosition : number;
-
 	constructor(lineType : LineType, content : string, startPosition : number, endPosition : number = -1) {
-		this.lineType = lineType;
-		this.content = content;
-		this.startPosition = startPosition;
-		this.endPosition = endPosition === -1 ? startPosition + 1 : endPosition;
-	}
-}
-
 function getCurrentColumnInfo(document: TextDocument, position: Position, rowNameOffset = 0) : ColumnInfo | undefined {
 	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) {
 		return undefined;
@@ -429,26 +516,6 @@ function provideTxtHover(document: TextDocument, position: Position, token: Canc
 					`|       Front2        | **${currentRowData[1].trim()}** |\n` +
 					`|      Content        |       **${hoverContent}**       |\n`;
 	return new Hover(tipInfo);
-}
-
-function updateCommandStatusBar() : void {
-	if(currentTextStatus === TextStatus.NoText) {
-		if(commandStatusBar) { commandStatusBar.hide(); }
-		return;
-	}
-	if(! commandStatusBar) {
-		commandStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
-	}
-
-	if(currentTextStatus === TextStatus.TextNormal) {
-		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_FORMAT;
-		commandStatusBar.command = constant.COMMAND_TEXT_FORMAT;
-	} else if(currentTextStatus === TextStatus.TextFormat) {
-		commandStatusBar.text = constant.STATUS_BAR_ITEM_TXT_COMMAND_UNDO_FORMAT;
-		commandStatusBar.command = constant.COMMAND_TEXT_UNDO_FORMAT;
-	}
-	commandStatusBar.color = constant.STATUS_BAR_ITEM_TXT_COMMAND_COLOR;
-	commandStatusBar.show();
 }
 
 function openWebView() : void {
@@ -507,19 +574,6 @@ function openWebView() : void {
 	webViewPanel.webview.html = htmlContent;
 }
 
-function initWebViewStatusBarItem() : void {
-	const { activeTextEditor } = vscode.window;
-	if(! activeTextEditor || activeTextEditor.document.languageId !== constant.LANGUAGE_TEXT) {
-		return;
-	}
-	webViewStatusBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200);
-
-	webViewStatusBar.command = constant.COMMAND_TXT_OPEN_WEBVIEW;
-	webViewStatusBar.text = constant.STATUS_BAR_ITEM_TXT_WEBVIEW;
-	webViewStatusBar.color = constant.STATUS_BAR_ITEM_TXT_WEBVIEW_COLOR;
-	webViewStatusBar.show();
-}
-
 function onTextEditorChange(editor: TextEditor | undefined) {
 	if(currentTextEditor) {
 		logUtil.debug(`[onTextEditorChange] previous file: ${currentTextEditor.document.fileName}`);
@@ -537,7 +591,7 @@ function onTextEditorChange(editor: TextEditor | undefined) {
 	messageBroker.sendTextEditorSelectChange();
 }
 
-function updateSelectInfo(document : TextDocument, position : Position, forceUpdate = false, rowNameOffset = 0) : void {
+function updateSelectInfo(document : TextDocument, position : Position, rowNameOffset = 0) : void {
 	if(! position) { return; }
 	if(! headerStatuBar) { headerStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200); }
 	if(! frontStatuBar) { frontStatuBar = vscode.window.createStatusBarItem(StatusBarAlignment.Left, 200); }
@@ -796,7 +850,6 @@ function onVisibleRangeChanged(event : TextEditorVisibleRangesChangeEvent) : voi
 	if(! visibleRanges || visibleRanges.length === 0 || ! visibleRanges[0]) { return; }
 	const { start, end } = visibleRanges[0];
 	logUtil.debug(`start: (${start.line}, ${start.character}), end: (${end.line}, ${end.character})`);
-	messageBroker.sendUpdateTextStatusMessage(TextStatus.NoText);
 }
 
 function onTextDocumentChange(event: TextDocumentChangeEvent) : void {

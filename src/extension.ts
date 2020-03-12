@@ -5,7 +5,7 @@ export function activate(context: ExtensionContext) {
 
 	console.log('"self-util" is now active');
 
-	txt.init(context);
+	txt.initialize(context);
 }
 
 export function deactivate() {}

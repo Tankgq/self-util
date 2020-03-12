@@ -4,10 +4,37 @@ import { TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, Position, 
 
 export enum MessageCode {
     Null,
+    /**
+     * 竖直方向可视区域改变
+     */
     VisibleRangesChange,
+    /**
+     * 将当前选择区域的框出来
+     */
+    EmphasizeCurrentLine,
+    /**
+     * 修改文本
+     */
     TextDocumentChange,
+    /**
+     * 状态改变
+     */
     UpdateTextStatus,
+    /**
+     * 更新左下角的命令按钮
+     */
     UpdateCommandStatusBar,
+    /**
+     * 更新左下角的 Header 以及 Front 信息
+     */
+    UpdateInfoStatusBar,
+    /**
+     * 更新左下角的 webview 按钮
+     */
+    UpdateWebviewStatusBar,
+    /**
+     * 选择的区域的改变
+     */
     TextEditorSelectChange,
     All
 }
@@ -34,7 +61,8 @@ export function sendMessage(messageCode : MessageCode, ... msg : any) : void {
     if(messageCode === MessageCode.Null) { return; }
     const subject = subjectDic.get(messageCode);
     if(! subject) { return; }
-    subject.next.apply(subject, msg);
+    if(msg.length) { subject.next(msg[0]); }
+    else { subject.next(); }
 }
 
 export function dispose(messageCode: MessageCode) : void {
@@ -60,16 +88,28 @@ export function sendVisibleRangesChangeMessage(event : TextEditorVisibleRangesCh
     sendMessage(MessageCode.VisibleRangesChange, event);
 }
 
+export function sendEmphasizeCurrentLineMessage(param : { position ?: number, bForceUpdate : boolean }) : void {
+    sendMessage(MessageCode.EmphasizeCurrentLine, param);
+}
+
 export function sendTextDocumentChangeMessage(event : TextDocumentChangeEvent) : void {
     sendMessage(MessageCode.TextDocumentChange, event);
 }
 
 export function sendUpdateTextStatusMessage(textStatus ?: TextStatus) : void {
-    sendMessage(MessageCode.TextDocumentChange, textStatus);
+    sendMessage(MessageCode.UpdateTextStatus, textStatus);
 }
 
 export function sendUpdateCommandStatusBar() : void {
     sendMessage(MessageCode.UpdateCommandStatusBar);
+}
+
+export function sendUpdateInfoStatusBar() : void {
+    sendMessage(MessageCode.UpdateInfoStatusBar);
+}
+
+export function sendUpdateWebviewStatusBar() : void {
+    sendMessage(MessageCode.UpdateWebviewStatusBar);
 }
 
 export function sendTextEditorSelectChange(event ?: TextEditorSelectionChangeEvent) : void {
