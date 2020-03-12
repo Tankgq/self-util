@@ -9,7 +9,7 @@ import { TextStatus as TextStatus } from '../constant';
 import * as logUtil from './logUtil';
 import * as messageBroker from './messageBroker';
 import { Subject } from 'rxjs';
-import { throttleTime } from 'rxjs/operators';
+import { debounceTime } from 'rxjs/operators';
 import { MessageCode } from './messageBroker';
 
 class ColumnInfo {
@@ -219,13 +219,13 @@ export function initialize(context : ExtensionContext) : void {
 	vscode.window.onDidChangeTextEditorVisibleRanges(event => messageBroker.sendVisibleRangesChangeMessage(event));
 	const visibleRangeChangedSubject = new Subject<TextEditorVisibleRangesChangeEvent>();
 	messageBroker.addSubject(MessageCode.VisibleRangesChange, visibleRangeChangedSubject);
-	visibleRangeChangedSubject.pipe(throttleTime(500)).subscribe(event => onVisibleRangeChanged(event));
+	visibleRangeChangedSubject.pipe(debounceTime(333)).subscribe(event => onVisibleRangeChanged(event));
 	
 	// 选择的区域的改变
 	vscode.window.onDidChangeTextEditorSelection(event => messageBroker.sendTextEditorSelectChange(event));
 	const textEditorSelectChangeSubject = new Subject<TextEditorSelectionChangeEvent | undefined>();
 	messageBroker.addSubject(MessageCode.TextEditorSelectChange, textEditorSelectChangeSubject);
-	textEditorSelectChangeSubject.pipe(throttleTime(500)).subscribe(event => onTextEditorSelectChange(event));
+	textEditorSelectChangeSubject.pipe(debounceTime(333)).subscribe(event => onTextEditorSelectChange(event));
 
 	// 更新左下角的命令按钮
 	const commandStatusBarSubject = new Subject<void>();
@@ -471,7 +471,6 @@ function getCurrentLine(document : TextDocument, position : Position) : string {
 	return currentLine;
 }
 
-	constructor(lineType : LineType, content : string, startPosition : number, endPosition : number = -1) {
 function getCurrentColumnInfo(document: TextDocument, position: Position, rowNameOffset = 0) : ColumnInfo | undefined {
 	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) {
 		return undefined;
