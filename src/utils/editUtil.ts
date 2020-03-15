@@ -51,14 +51,14 @@ class EditTool {
 
 	startEdit() : this {
 		if(! this.textEditor) {
-			logUtil.error('当前没有初始化 textEditor');
+			logUtil.error('[EditTool] 当前没有初始化 textEditor');
 			return this;
 		}
 
 		if(! this.editThenable) {
 			const functionList = this.editFunctionList.shift();
 			if(! functionList || ! functionList.length) {
-				logUtil.error('当前没有任何操作');
+				logUtil.error('[EditTool] 当前没有任何操作');
 				return this;
 			}
 			this.edit(functionList);
@@ -75,20 +75,20 @@ class EditTool {
 			return;
 		}
 		this.editThenable = this.textEditor.edit(editBuilder => {
-			logUtil.debug(`start edit version: ${this.editVersion}`);
+			logUtil.debug(`[EditTool] start edit version: ${this.editVersion}`);
 			const count = functionList.length;
 			for(let idx = 0; idx < count; ++ idx) {
 				functionList[idx](editBuilder);
 			}
 			functionList.length = 0;
 		}).then(_ => {
-			logUtil.debug(`edit version: ${this.editVersion} complete`);
+			logUtil.debug(`[EditTool] edit version: ${this.editVersion} complete`);
 			
 			const then = this.editCompleteFunctionList.shift();
 			if(then && then.length) {
 				const length = then.length;
 				for(let idx = 0; idx < length; ++ idx) { then[idx](undefined); }
-				logUtil.debug(`edit version: ${this.editVersion}, editCompleteFunction executed complete`);
+				logUtil.debug(`[EditTool] edit version: ${this.editVersion}, editCompleteFunction executed complete`);
 			}
 			this.editVersion += 1;
 			
@@ -101,13 +101,10 @@ class EditTool {
 		});
 	}
 	
+	// 当前编辑完成后执行
 	then(onComplete : (_ : any) => void) : EditTool {
 		if(! this.textEditor ) {
-			logUtil.error('当前没有初始化 textEditor');
-			return this;
-		}
-		if(! this.editCompleteFunctionList.length) {
-			logUtil.error('当前没有任何编辑操作');
+			logUtil.error('[EditTool] 当前没有初始化 textEditor');
 			return this;
 		}
 		const lastThen = this.editCompleteFunctionList[this.editCompleteFunctionList.length - 1];

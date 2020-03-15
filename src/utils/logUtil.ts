@@ -1,7 +1,7 @@
 import * as timeUtil from './timeUtil';
 import * as vscode from 'vscode';
 
-export const enum LogLevel {
+export enum LogLevel {
 	Trace,
 	Debug,
 	Info,
@@ -10,9 +10,9 @@ export const enum LogLevel {
 	Fatal
 }
 
-export let maxStackDepth : number = 3;
-export let maxStackDepthWhenLarge : number = 5;
-export let logLevel : LogLevel = LogLevel.Trace;
+const maxStackDepth : number = 3;
+const maxStackDepthWhenLarge : number = 5;
+const logLevel : LogLevel = LogLevel.Error;
 
 export function trace(message?: any, ...optionalParams: any[]) : void {
 	if(logLevel > LogLevel.Trace) { return; }

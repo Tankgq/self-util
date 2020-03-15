@@ -1,5 +1,6 @@
 import { Subject } from "rxjs";
 import { TextStatus } from "../constant";
+import * as logUtil from './logUtil';
 import { TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, Position, TextEditorSelectionChangeEvent } from 'vscode';
 
 export enum MessageCode {
@@ -36,6 +37,14 @@ export enum MessageCode {
      * 选择的区域的改变
      */
     TextEditorSelectChange,
+    /**
+     * 更新文本的信息, 比如表头的信息
+     */
+    UpdateTextInfo,
+    /**
+     * 更新行号, 在第 line 行添加了 count 行(count 可为负数)
+     */
+    UpdateLineInfo,
     All
 }
 
@@ -61,8 +70,7 @@ export function sendMessage(messageCode : MessageCode, ... msg : any) : void {
     if(messageCode === MessageCode.Null) { return; }
     const subject = subjectDic.get(messageCode);
     if(! subject) { return; }
-    if(msg.length) { subject.next(msg[0]); }
-    else { subject.next(); }
+    subject.next.apply(subject, msg);
 }
 
 export function dispose(messageCode: MessageCode) : void {
@@ -85,6 +93,7 @@ export function dispose(messageCode: MessageCode) : void {
 }
 
 export function sendVisibleRangesChangeMessage(event : TextEditorVisibleRangesChangeEvent) : void {
+    logUtil.error('sendVisibleRangesChangeMessage');
     sendMessage(MessageCode.VisibleRangesChange, event);
 }
 
@@ -100,18 +109,26 @@ export function sendUpdateTextStatusMessage(textStatus ?: TextStatus) : void {
     sendMessage(MessageCode.UpdateTextStatus, textStatus);
 }
 
-export function sendUpdateCommandStatusBar() : void {
+export function sendUpdateCommandStatusBarMessage() : void {
     sendMessage(MessageCode.UpdateCommandStatusBar);
 }
 
-export function sendUpdateInfoStatusBar() : void {
+export function sendUpdateInfoStatusBarMessage() : void {
     sendMessage(MessageCode.UpdateInfoStatusBar);
 }
 
-export function sendUpdateWebviewStatusBar() : void {
+export function sendUpdateWebviewStatusBarMessage() : void {
     sendMessage(MessageCode.UpdateWebviewStatusBar);
 }
 
-export function sendTextEditorSelectChange(event ?: TextEditorSelectionChangeEvent) : void {
+export function sendTextEditorSelectChangeMessage(event ?: TextEditorSelectionChangeEvent) : void {
     sendMessage(MessageCode.TextEditorSelectChange, event);
+}
+
+export function sendUpdateTextInfoMessage() : void {
+    sendMessage(MessageCode.UpdateTextInfo);
+}
+
+export function sendUpdateLineInfo(line : number, count : number) : void {
+    sendMessage(MessageCode.UpdateLineInfo, line, count);
 }
