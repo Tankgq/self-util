@@ -1,7 +1,7 @@
 import { StatusBarPriority } from './../constant';
 import * as vscode from 'vscode';
 import * as constant from '../constant';
-import { Hover, ProviderResult, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent, CancellationToken } from 'vscode';
+import { Hover, ProviderResult, Position, TextDocument, ExtensionContext, Range, StatusBarAlignment, StatusBarItem, WebviewPanel, TextEditor, TextDocumentWillSaveEvent, TextEditorEdit, TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent, CancellationToken, TextEditorDecorationType } from 'vscode';
 import * as path from 'path';
 import * as webviewUtil from './webviewUtil';
 import * as editUtil from './editUtil';
@@ -31,6 +31,8 @@ class LineInfo {
 const GetWordRegExp = /[^\t \n║┃┆┇]+/;
 const GetDigitRegExp = /(?<=[^:])"(\d+)"/g;
 const ReplaceSeparatorRegExp2 = /║/g;
+
+let decorationType : TextEditorDecorationType;
 
 enum SeparatorType {
 	FillChar,
@@ -129,6 +131,7 @@ const AddedContentSeparatorChar = [' ', '━', '┇', '┏', '┳', '┓', '┗'
 const AddedContentTopStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.TopLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
 // ┇  23  ┇    62     ┇    狙击炮技能    ┇    20    ┇
 const AddedContentStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.Vertical] + AddedContentSeparatorChar[AddedContentSeparatorType.FillChar];
+const AddedContentSeparatorStr = AddedContentSeparatorChar[AddedContentSeparatorType.FillChar] + AddedContentSeparatorChar[AddedContentSeparatorType.Vertical] + AddedContentSeparatorChar[AddedContentSeparatorType.FillChar];
 // ┗━━━━━━┻━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━┛
 const AddedContentBottomStartStr = AddedContentSeparatorChar[AddedContentSeparatorType.BottomLeft] + AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal];
 
@@ -147,6 +150,7 @@ let lastSelectLine : number = -1;
 let currentTextStatus : TextStatus = TextStatus.NoText;
 let currentTextEditor : TextEditor | undefined = undefined;
 let addedLineDic : Map<string, Array<LineInfo>> = new Map();
+const contentIsDirtyDic : Map<string, boolean> = new Map();
 
 export function initialize(context : ExtensionContext) : void {
 	selfContext = context;
@@ -218,13 +222,13 @@ export function initialize(context : ExtensionContext) : void {
 	vscode.window.onDidChangeTextEditorVisibleRanges(event => messageBroker.sendVisibleRangesChangeMessage(event));
 	const visibleRangeChangedSubject = new Subject<TextEditorVisibleRangesChangeEvent>();
 	messageBroker.addSubject(MessageCode.VisibleRangesChange, visibleRangeChangedSubject);
-	visibleRangeChangedSubject.pipe(debounceTime(100)).subscribe(event => onVisibleRangeChanged(event));
+	visibleRangeChangedSubject.pipe(debounceTime(333)).subscribe(event => onVisibleRangeChanged(event));
 	
 	// 选择的区域的改变
 	vscode.window.onDidChangeTextEditorSelection(event => messageBroker.sendTextEditorSelectChangeMessage(event));
 	const textEditorSelectChangeSubject = new Subject<TextEditorSelectionChangeEvent | undefined>();
 	messageBroker.addSubject(MessageCode.TextEditorSelectChange, textEditorSelectChangeSubject);
-	textEditorSelectChangeSubject.pipe(debounceTime(100)).subscribe(event => onTextEditorSelectChange(event));
+	textEditorSelectChangeSubject.pipe(debounceTime(333)).subscribe(event => onTextEditorSelectChange(event));
 
 	// 更新左下角的命令按钮
 	const commandStatusBarSubject = new Subject<void>();
@@ -417,6 +421,7 @@ function updateInfoStatusBar() : void {
 			let separator = '\t';
 			if(currentTextStatus === TextStatus.TextFormat) {
 				separator = ContentSeparatorStr;
+				if(line.indexOf(separator) === -1) { separator = AddedContentSeparatorStr; }
 				line = line.substr(1);
 			}
 			const rowData = line.split(separator);
@@ -443,14 +448,14 @@ function emphasizeCurrentLine(position ?: number, bForceUpdate : boolean = false
 	if(! currentTextEditor) { return; }
 	const { document } = currentTextEditor;
 	removeEmphasizeInfo(document);
-	if(currentTextStatus !== TextStatus.TextFormat) { return; }
+	if(currentTextStatus === TextStatus.NoText) { return; }
 	if(! position) {
 		const { selection } = currentTextEditor;
 		if(selection.start.line !== selection.end.line) { return; }
 		position = selection.start.line;
 	}
 	const line = document.lineAt(position).text;
-	if(! line.startsWith(ContentStartStr)) { return; }
+	// if(! line.startsWith(ContentStartStr)) { return; }
 	logUtil.debug(`[updateSeparator] line: ${position}`);
 	
 	if(position <= currentColumnNameRowIdx + 1 || position + 1 >= document.lineCount) {
@@ -460,21 +465,31 @@ function emphasizeCurrentLine(position ?: number, bForceUpdate : boolean = false
 								.replace(modifyHorizontalReg, AddedContentSeparatorChar[AddedContentSeparatorType.Horizontal])
 								.substr(1);
 	separatorContent = separatorContent.substr(0, separatorContent.length - 1);
-	const upContent = AddedContentSeparatorChar[AddedContentSeparatorType.TopLeft]
-						+ separatorContent.replace(modifyMiddleCenterReg, AddedContentSeparatorChar[AddedContentSeparatorType.TopCenter])
-						+ AddedContentSeparatorChar[AddedContentSeparatorType.TopRight] + '\n';
-	const downContent = AddedContentSeparatorChar[AddedContentSeparatorType.BottomLeft]
-						+ separatorContent.replace(modifyMiddleCenterReg, AddedContentSeparatorChar[AddedContentSeparatorType.BottomCenter])
-						+ AddedContentSeparatorChar[AddedContentSeparatorType.BottomRight] + '\n';
+	// const upContent = AddedContentSeparatorChar[AddedContentSeparatorType.TopLeft]
+	// 					+ separatorContent.replace(modifyMiddleCenterReg, AddedContentSeparatorChar[AddedContentSeparatorType.TopCenter])
+	// 					+ AddedContentSeparatorChar[AddedContentSeparatorType.TopRight] + '\n';
+	// const downContent = AddedContentSeparatorChar[AddedContentSeparatorType.BottomLeft]
+	// 					+ separatorContent.replace(modifyMiddleCenterReg, AddedContentSeparatorChar[AddedContentSeparatorType.BottomCenter])
+	// 					+ AddedContentSeparatorChar[AddedContentSeparatorType.BottomRight] + '\n';
 
-	const upLineInfo = new LineInfo(LineType.Separator, upContent, position);
-	const downLineInfo = new LineInfo(LineType.Separator, downContent, position + 1);
-	const range = new Range(new Position(position, 0), new Position(position + 1, 0));
-	const content = document.lineAt(position).text.replace(modifyContentReg, AddedContentSeparatorChar[AddedContentSeparatorType.Vertical]) + '\n';
-	editUtil.getInstance.addEdit(addLine(document.fileName, upLineInfo))
-						.addEdit(editBuilder => editBuilder.replace(range, content))
-						.addEdit(addLine(document.fileName, downLineInfo))
-						.startEdit();
+	// const upLineInfo = new LineInfo(LineType.Separator, upContent, position);
+	// const downLineInfo = new LineInfo(LineType.Separator, downContent, position + 1);
+	// const range = new Range(new Position(position, 0), new Position(position + 1, 0));
+	// const content = document.lineAt(position).text.replace(modifyContentReg, AddedContentSeparatorChar[AddedContentSeparatorType.Vertical]) + '\n';
+	// const modifyLineInfo = new LineInfo(LineType.ModifiedContent, content, position);
+	// editUtil.getInstance.addEdit(addLine(document.fileName, upLineInfo))
+	// 					.addEdit(modifyLine(document.fileName, modifyLineInfo, range))
+	// 					.addEdit(addLine(document.fileName, downLineInfo))
+	// 					.startEdit();
+	if(decorationType) { decorationType.dispose(); }
+	decorationType = getDecorationType();
+	currentTextEditor.setDecorations(decorationType, [new Range(new Position(position, 0), new Position(position, line.length + 1))]);
+}
+
+function getDecorationType() : TextEditorDecorationType {
+	return vscode.window.createTextEditorDecorationType({
+		outline: '#00DD99 thin solid'
+	});
 }
 
 const removeModifiedContentReg = new RegExp(AddedContentSeparatorChar[AddedContentSeparatorType.Vertical], 'g');
@@ -489,6 +504,11 @@ function removeEmphasizeInfo(document : TextDocument) : void {
 		const range = new Range(new Position(modifiedContent.startPosition, 0), new Position(modifiedContent.endPosition, 0));
 		const content = modifiedContent.content.replace(removeModifiedContentReg, SeparatorChar[SeparatorType.Vertical]);
 		deleteEdit.push(editBuilder => editBuilder.replace(range, content));
+		const addLineList = addedLineDic.get(document.fileName);
+		if(addLineList) {
+			const idx = addLineList.indexOf(modifiedContentList[0]);
+			if(idx > -1) { addLineList.splice(idx, 1); }
+		}
 	}
 	editUtil.getInstance.addEdit(deleteEdit)
 						.startEdit();
@@ -542,9 +562,11 @@ function getWordAtPosition(document : TextDocument, position : Position) : strin
 function getColumnIdx(document: TextDocument, position: Position) : number {
 	if(! currentTextEditor || currentTextStatus === TextStatus.NoText || ! position) { return -1; }
 
-	const separator = (currentTextStatus === TextStatus.TextFormat ? ContentSeparatorStr : '\t');
-	let line = document.lineAt(position).text + separator;
-	if(currentTextStatus === TextStatus.TextFormat && ! line.startsWith(ContentStartStr)) { return -1; }
+	let separator = (currentTextStatus === TextStatus.TextFormat ? ContentSeparatorStr : '\t');
+	let line = document.lineAt(position).text;
+	if(line.indexOf(separator) === -1) { separator = AddedContentSeparatorStr; }
+	line += separator;
+	if(currentTextStatus === TextStatus.TextFormat && ! line.startsWith(ContentStartStr) && ! line.startsWith(AddedContentStartStr)) { return -1; }
 
 	const contentIdx = position.character;
 	const length = line.length;
@@ -569,6 +591,7 @@ function provideTxtHover(document: TextDocument, position: Position, token: Canc
 	let line = document.lineAt(position.line).text;
 	if(currentTextStatus === TextStatus.TextFormat) {
 		separator = ContentSeparatorStr;
+		if(line.indexOf(separator) === -1) { separator = AddedContentSeparatorStr; }
 		line = line.substr(1);
 	}
 	const hoverContent = getWordAtPosition(document, position);
@@ -764,8 +787,33 @@ function addLine(fileName : string, lineInfo : LineInfo, offset : number = 0) : 
 	};
 }
 
+function modifyLine(fileName : string, lineInfo : LineInfo, range : Range, offset : number = 0) : ((editBuilder: TextEditorEdit) => void) | undefined {
+	if(! currentTextEditor || currentTextStatus !== TextStatus.TextFormat) { return undefined; }
+	let lineInfoList = addedLineDic.get(fileName);
+	if(lineInfoList === undefined) {
+		lineInfoList = new Array<LineInfo>();
+		addedLineDic.set(fileName, lineInfoList);
+	}
+	const count = lineInfoList.length;
+	const addLineCount = lineInfo.endPosition - lineInfo.startPosition;
+	for(let idx = 0; idx < count; ++ idx) {
+		if(lineInfoList[idx].startPosition < lineInfo.startPosition) { continue; }
+		lineInfoList[idx].startPosition += addLineCount;
+		lineInfoList[idx].endPosition += addLineCount;
+		logUtil.debug(`start: ${lineInfoList[idx].startPosition - addLineCount} -> ${lineInfoList[idx].startPosition}`);
+	}
+	lineInfoList.push(lineInfo);
+	// 因为添加之前可能会删除掉一些行, document 中行号还没发生改变, 但是实际存储的行号得修正一下
+	lineInfo.startPosition += offset;
+	lineInfo.endPosition += offset;
+	logUtil.debug(`adjust start: ${lineInfo.startPosition}, end: ${lineInfo.endPosition}`);
+	return editBuilder => {
+		editBuilder.replace(range, lineInfo.content);
+		logUtil.debug(`replace start: ${lineInfo.startPosition}, count: ${addLineCount}`);
+	};
+}
+
 function onTextEditorSelectChange(event ?: vscode.TextEditorSelectionChangeEvent) {
-	logUtil.error();
 	if(! currentTextEditor || currentTextStatus === TextStatus.NoText) { return; }
 	const { selections } = event ? event : currentTextEditor;
 	if(! selections) { return; }
@@ -773,6 +821,8 @@ function onTextEditorSelectChange(event ?: vscode.TextEditorSelectionChangeEvent
 	if(selections.length !== 1 || ! selections[0]) { return; }
 	const { start, end } = selections[0];
 	if(start.line !== end.line) { return; }
+	const contentModifiedList = getAddLineByType(currentTextEditor.document.fileName, LineType.ModifiedContent);
+	if(contentModifiedList.length > 0 && contentModifiedList[0].startPosition + 1 === start.line) { return; }
 	messageBroker.sendEmphasizeCurrentLineMessage({ position: start.line, bForceUpdate: false});
 }
 

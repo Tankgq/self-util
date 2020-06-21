@@ -1,7 +1,6 @@
 import { Subject } from "rxjs";
 import { TextStatus } from "../constant";
-import * as logUtil from './logUtil';
-import { TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, Position, TextEditorSelectionChangeEvent } from 'vscode';
+import { TextEditorVisibleRangesChangeEvent, TextDocumentChangeEvent, TextEditorSelectionChangeEvent } from 'vscode';
 
 export enum MessageCode {
     Null,
@@ -93,7 +92,6 @@ export function dispose(messageCode: MessageCode) : void {
 }
 
 export function sendVisibleRangesChangeMessage(event : TextEditorVisibleRangesChangeEvent) : void {
-    logUtil.error('sendVisibleRangesChangeMessage');
     sendMessage(MessageCode.VisibleRangesChange, event);
 }
 
